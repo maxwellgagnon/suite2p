@@ -261,7 +261,7 @@ def find_best_scale(I: np.ndarray, spatial_scale: int) -> Tuple[int, EstimateMod
     Returns best scale and estimate method (if the spatial scale was forced (if positive) or estimated (the top peaks).
     """
     if spatial_scale > 0:
-        return max(1, min(4, spatial_scale)), EstimateMode.Forced
+        return max(0.1, min(4, spatial_scale)), EstimateMode.Forced
     else:
         scale = estimate_spatial_scale(I=I)
         if scale > 0:

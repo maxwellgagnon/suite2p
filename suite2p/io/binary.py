@@ -275,10 +275,15 @@ class BinaryFile:
         """
 
         good_frames = ~bad_frames if bad_frames is not None else np.ones(self.n_frames, dtype=bool)
-
+        print("Good Frames: %d" % (good_frames.sum()))
+        print("Reject Threshold: %.4f" % reject_threshold)
         batch_size = min(np.sum(good_frames), 500)
+        print("Batch size: %2f" % batch_size)
+        print("bin size: %2f" % bin_size)
         batches = []
         for indices, data in self.iter_frames(batch_size=batch_size):
+            print("  Indices: ", indices)
+            print("  Data shape: ", data.shape)
             if len(data) != batch_size:
                 break
 
