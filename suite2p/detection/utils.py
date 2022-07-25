@@ -238,7 +238,7 @@ def downsample(mov: np.ndarray, taper_edge: bool = True) -> np.ndarray:
     return mov2
 
 
-def threshold_reduce(mov: np.ndarray, intensity_threshold: float) -> np.ndarray:
+def threshold_reduce(mov: np.ndarray, intensity_threshold: float, fix_edges=False, mean_subtract=False) -> np.ndarray:
     """
     Returns standard deviation of pixels, thresholded by 'intensity_threshold'.
     Run in a loop to reduce memory footprint.
@@ -257,8 +257,17 @@ def threshold_reduce(mov: np.ndarray, intensity_threshold: float) -> np.ndarray:
     """
     nbinned, Lyp, Lxp = mov.shape
     Vt = np.zeros((Lyp,Lxp), 'float32')
+    if mean_subtract:
+        mov = mov.copy() - mov.mean(axis=0)
+
+    if intensity_threshold is None:
+        intensity_threshold = mov.min()
+
     for t in range(nbinned):
         Vt += mov[t]**2 * (mov[t] > intensity_threshold)
     Vt = Vt**.5
+    if fix_edges:
+        Vt[0] = Vt[1]; Vt[-1] = Vt[-2]
+        Vt[:,0] = Vt[:,1]; Vt[:,-1] = Vt[:,-2]
     return Vt
 

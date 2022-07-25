@@ -22,11 +22,11 @@ def neuropil_subtraction(mov: np.ndarray, filter_size: int) -> None:
     return movt
 
 
-def square_convolution_2d(mov: np.ndarray, filter_size: int) -> np.ndarray:
+def square_convolution_2d(mov: np.ndarray, filter_size: int, mode='constant') -> np.ndarray:
     """Returns movie convolved by uniform kernel with width 'filter_size'."""
     movt = np.zeros_like(mov, dtype=np.float32)
     for frame, framet in zip(mov, movt):
-        framet[:] = filter_size * uniform_filter(frame, size=filter_size, mode='constant')
+        framet[:] = filter_size * uniform_filter(frame, size=filter_size, mode=mode)
     return movt
 
 

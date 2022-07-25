@@ -1,6 +1,5 @@
 import numpy as n
 np = n
-
 from scipy.ndimage import maximum_filter, gaussian_filter, uniform_filter
 
 def binned_mean(mov: np.ndarray, bin_size) -> np.ndarray:
@@ -33,15 +32,15 @@ def standard_deviation_over_time(mov: np.ndarray, batch_size: int) -> np.ndarray
     sdmov = np.maximum(1e-10, np.sqrt(sdmov / nbins))
     return sdmov
 
-def neuropil_subtraction(mov: np.ndarray, filter_size: int, filter_size_z: int) -> None:
+def neuropil_subtraction(mov: np.ndarray, filter_size: int, filter_size_z: int, mode='constant') -> None:
     """Returns movie subtracted by a low-pass filtered version of itself to help ignore neuropil."""
     nbinned, Lz, Ly, Lx = mov.shape
     filt_size = (filter_size_z, filter_size, filter_size)
     print('Neuropil filter size:', filt_size)
-    c1 = uniform_filter(np.ones((Lz, Ly, Lx)), size=filt_size, mode='constant')
+    c1 = uniform_filter(np.ones((Lz, Ly, Lx)), size=filt_size, mode=mode)
     movt = np.zeros_like(mov)
     for frame, framet in zip(mov, movt):
-        framet[:] = frame - (uniform_filter(frame, size=filt_size, mode='constant') / c1)
+        framet[:] = frame - (uniform_filter(frame, size=filt_size, mode=mode) / c1)
     return movt
 
 def downsample(mov: np.ndarray, taper_edge: bool = True) -> np.ndarray:
