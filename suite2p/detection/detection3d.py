@@ -8,7 +8,7 @@ def binned_mean(mov: np.ndarray, bin_size) -> np.ndarray:
     mov = mov[:(n_frames // bin_size) * bin_size]
     return mov.reshape(-1, bin_size, Lz, Ly, Lx).astype(np.float32).mean(axis=1)
 
-def standard_deviation_over_time(mov: np.ndarray, batch_size: int) -> np.ndarray:
+def standard_deviation_over_time(mov: np.ndarray, batch_size: int,sqrt=True) -> np.ndarray:
     """
     Returns standard deviation of difference between pixels across time, computed in batches of batch_size.
 
@@ -29,7 +29,8 @@ def standard_deviation_over_time(mov: np.ndarray, batch_size: int) -> np.ndarray
     sdmov = np.zeros((Lz, Ly, Lx), 'float32')
     for ix in range(0, nbins, batch_size):
         sdmov += ((np.diff(mov[ix:ix+batch_size, :, :], axis=0) ** 2).sum(axis=0))
-    sdmov = np.maximum(1e-10, np.sqrt(sdmov / nbins))
+    if sqrt: 
+        sdmov = np.maximum(1e-10, np.sqrt(sdmov / nbins))
     return sdmov
 
 def neuropil_subtraction(mov: np.ndarray, filter_size: int, filter_size_z: int, mode='constant') -> None:

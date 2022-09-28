@@ -190,7 +190,7 @@ def compute_reference_masks(refImg, ops=None):
 
     return maskMul, maskOffset, cfRefImg, maskMulNR, maskOffsetNR, cfRefImgNR
 
-def register_frames(refAndMasks, frames, ops=None):
+def register_frames(refAndMasks, frames, ops=None, base_shift=None):
     """ register frames to reference image 
     
     Parameters
@@ -204,6 +204,9 @@ def register_frames(refAndMasks, frames, ops=None):
 
     raw : bool (optional, default True)
         use raw_file for registration if available, if False forces reg_file to be used
+    
+    base_shift : tuple (optional, default None)
+        a tuple in the form (dy, dx) of a constant shift to be applied to all frames
 
     Returns
     --------
@@ -245,7 +248,11 @@ def register_frames(refAndMasks, frames, ops=None):
         maxregshift=ops['maxregshift'],
         smooth_sigma_time=ops['smooth_sigma_time'],
     )
-    
+    if base_shift is not None:
+        if ops['nonrigid']: print("base_shift with nonrigid on is broken!")
+        ymax += base_shift[0]
+        xmax += base_shift[1]
+
     for frame, dy, dx in zip(frames, ymax, xmax):
         frame[:] = rigid.shift_frame(frame=frame, dy=dy, dx=dx)
 
@@ -298,7 +305,7 @@ def shift_frames(frames, yoff, xoff, yoff1, xoff1, ops=None):
                                         ymax1=yoff1, xmax1=xoff1, bilinear=ops.get('bilinear_reg', True))
     return frames
 
-def register_binary(ops: Dict[str, Any], refImg=None, raw=True):
+def register_binary(ops: Dict[str, Any], refImg=None, raw=True, base_shift = None):
     """ main registration function
 
     if ops is a list of dictionaries, each will be registered separately
@@ -314,6 +321,9 @@ def register_binary(ops: Dict[str, Any], refImg=None, raw=True):
 
     raw : bool (optional, default True)
         use raw_file for registration if available, if False forces reg_file to be used
+
+    base_shift : tuple (optional, default None)
+        a tuple in the form (dy, dx) of a constant shift to be applied to all frames
 
     Returns
     --------

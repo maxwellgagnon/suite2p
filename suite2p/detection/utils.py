@@ -137,7 +137,7 @@ def hp_gaussian_filter(mov: np.ndarray, width: int) -> np.ndarray:
     return mov
 
 
-def hp_rolling_mean_filter(mov: np.ndarray, width: int) -> np.ndarray:
+def hp_rolling_mean_filter(mov: np.ndarray, width: int, copy=True) -> np.ndarray:
     """
     Returns a high-pass-filtered copy of the 3D array 'mov' using a non-overlapping rolling mean kernel over time.
 
@@ -154,13 +154,13 @@ def hp_rolling_mean_filter(mov: np.ndarray, width: int) -> np.ndarray:
         The filtered frames
 
     """
-    mov = mov.copy()
+    if copy: mov = mov.copy()
     for i in range(0, mov.shape[0], width):
         mov[i:i + width, :, :] -= mov[i:i + width, :, :].mean(axis=0)
     return mov
 
 
-def temporal_high_pass_filter(mov: np.ndarray, width: int) -> np.ndarray:
+def temporal_high_pass_filter(mov: np.ndarray, width: int, copy=True) -> np.ndarray:
     """
     Returns hp-filtered mov over time, selecting an algorithm for computational performance based on the kernel width.
 
@@ -177,7 +177,7 @@ def temporal_high_pass_filter(mov: np.ndarray, width: int) -> np.ndarray:
         The filtered frames
     """
     
-    return hp_gaussian_filter(mov, width) if width < 10 else hp_rolling_mean_filter(mov, width)  # gaussian is slower
+    return hp_gaussian_filter(mov, width) if width < 10 else hp_rolling_mean_filter(mov, width, copy=copy)  # gaussian is slower
     
 
 def standard_deviation_over_time(mov: np.ndarray, batch_size: int) -> np.ndarray:
@@ -238,7 +238,7 @@ def downsample(mov: np.ndarray, taper_edge: bool = True) -> np.ndarray:
     return mov2
 
 
-def threshold_reduce(mov: np.ndarray, intensity_threshold: float, fix_edges=False, mean_subtract=False) -> np.ndarray:
+def threshold_reduce(mov: np.ndarray, intensity_threshold: float, fix_edges=False, mean_subtract=False, sqrt=True) -> np.ndarray:
     """
     Returns standard deviation of pixels, thresholded by 'intensity_threshold'.
     Run in a loop to reduce memory footprint.
@@ -265,7 +265,7 @@ def threshold_reduce(mov: np.ndarray, intensity_threshold: float, fix_edges=Fals
 
     for t in range(nbinned):
         Vt += mov[t]**2 * (mov[t] > intensity_threshold)
-    Vt = Vt**.5
+    if sqrt: Vt = Vt**.5
     if fix_edges:
         Vt[0] = Vt[1]; Vt[-1] = Vt[-2]
         Vt[:,0] = Vt[:,1]; Vt[:,-1] = Vt[:,-2]
