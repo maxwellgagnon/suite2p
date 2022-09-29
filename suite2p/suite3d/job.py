@@ -3,7 +3,7 @@ import numpy as n
 from . import init_pass
 
 class Job:
-    def __init__(self, root_dir, job_id, params, tifs, exist_ok=False, verbosity=1):
+    def __init__(self, root_dir, job_id, params=None, tifs=None, exist_ok=False, verbosity=1, create=True):
         """Create a Job object that is a wrapper to manage files, current state, log etc.
 
         Args:
@@ -14,11 +14,18 @@ class Job:
             exist_ok (bool, optional): If False, will throw error if job_dir exists. Defaults to False.
             verbosity (int, optional): Verbosity level. 0: critical only, 1: info, 2: debug. Defaults to 1.
         """
-        self.verbosity = verbosity
-        self.params = params
 
-        self.init_job_dir(root_dir, job_id, exist_ok=exist_ok)
-        self.tifs = tifs
+        self.verbosity = verbosity
+        if create:
+            self.params = params
+            self.params['tifs'] = tifs
+            self.tifs = tifs
+            self.init_job_dir(root_dir, job_id, exist_ok=exist_ok)
+        else:
+            self.init_job_dir(root_dir, job_id, exist_ok=True, update_params=False)
+            self.load_params()
+            self.tifs = self.params.get('tifs', [])
+            
 
 
     def log(self, string, level=1):
@@ -29,16 +36,29 @@ class Job:
             level (int, optional): Level equal or below self.verbosity will be printed. Defaults to 1.
         """
         if level <= self.verbosity:
-            print(string)
+            # print('xxx')
+            print(("   " * level) + string)
 
-    def save_params(self):
+    def save_params(self, new_params=None):
         """Update saved params in job_dir/params.npy
         """
-        params_path = os.path.join(self.job_dir, 'params.npy')
+        params_path = os.path.join(self.dirs['job_dir'], 'params.npy')
+        if new_params is not None:
+            self.params.update(new_params)
         n.save(params_path, self.params)
         self.log("Updated params file: %s" % params_path, 2)
 
-    def init_job_dir(self, root_dir, job_id, exist_ok=False):
+    def load_params(self):
+        params_path = os.path.join(self.dirs['job_dir'], 'params.npy')
+        self.params = n.load(params_path, allow_pickle=True).item()
+        self.log("Found and loaded params from %s" % params_path)
+
+    def load_summary(self):
+        summary_path = os.path.join(self.dirs['job_summary_dir'], 'summary.npy')
+        summary = n.load(summary_path,  allow_pickle=True).item()
+        return summary
+
+    def init_job_dir(self, root_dir, job_id, exist_ok=False, update_params=True):
         """Create a job directory and nested dirs
 
         Args:
@@ -52,19 +72,25 @@ class Job:
             self.log("Job directory %s already exists" % job_dir, 0)
             assert exist_ok, "Manually delete job_dir, or set exist_ok=True"
 
+        if 'dirs.npy' in os.listdir(job_dir):
+            self.log("Loading dirs ")
+            self.dirs = n.load(os.path.join(job_dir, 'dirs.npy'),allow_pickle=True).item()
+            return
+
         os.makedirs(job_dir, exist_ok=True)
         job_summary_dir = os.path.join(job_dir,'summary')
         os.makedirs(job_summary_dir, exist_ok=True)
         job_reg_data_dir = os.path.join(job_dir,'registered_data')
         os.makedirs(job_reg_data_dir, exist_ok=True)
+        job_iter_dir = os.path.join(job_dir,'registered_data')
+        os.makedirs(job_iter_dir, exist_ok=True)
 
-        self.job_dir = job_dir
-        self.summary_dir = job_summary_dir
-        self.reg_data_dir = job_reg_data_dir
-        self.params['job_dir'] = job_dir
-        self.params['job_summary_dir'] = job_summary_dir
-        self.params['job_reg_data_dir'] = job_reg_data_dir
-        self.save_params()
+        self.dirs = {}
+        self.dirs['job_dir'] = job_dir
+        self.dirs['job_summary_dir'] = job_summary_dir
+        self.dirs['job_reg_data_dir'] = job_reg_data_dir
+        self.dirs['job_iter_dir'] = job_iter_dir
+        n.save(os.path.join(job_dir, 'dirs.npy'), self.dirs)
 
     def run_init_pass(self):
         self.log("Launching initial pass", 0)

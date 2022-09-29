@@ -8,11 +8,12 @@ import tifffile
 import imreg_dft as imreg
 import json
 
+def default_log(string, val): print(string)
 lbm_plane_to_ch = n.array([1,5,6,7,8,9,2,10,11,12,13,14,15,16,17,3,18,19,20,21,22,23,4,24,25,26,27,28,29,30])-1
 lbm_ch_to_plane = n.array(n.argsort(lbm_plane_to_ch))
 
 def load_and_stitch_tifs(paths, planes, verbose=True,n_proc=15, mp_args = {}, filt=None, concat=True,
-                         convert_plane_ids_to_channel_ids = True):
+                         convert_plane_ids_to_channel_ids = True, log_cb=default_log):
 
     if convert_plane_ids_to_channel_ids:
         channels = lbm_plane_to_ch[n.array(planes)]
@@ -21,7 +22,7 @@ def load_and_stitch_tifs(paths, planes, verbose=True,n_proc=15, mp_args = {}, fi
 
     mov_list = []
     for tif_path in paths:
-        if verbose: print("Loading %s" % tif_path)
+        if verbose: log_cb("Loading %s" % tif_path, 2)
         im, px, py = load_and_stitch_full_tif_mp(tif_path, channels=channels, verbose=False, filt=filt, n_proc=n_proc, **mp_args)
         mov_list.append(im)
     if concat:
@@ -30,7 +31,7 @@ def load_and_stitch_tifs(paths, planes, verbose=True,n_proc=15, mp_args = {}, fi
     else: 
         mov = mov_list
         size = -1
-    if verbose: print("Loaded %d files, total %.2f GB" % (len(paths),size))
+    if verbose: log_cb("Loaded %d files, total %.2f GB" % (len(paths),size),1)
     return mov
 
 def load_and_stitch_full_tif_mp(path, channels, n_proc=10, verbose=True,translations=None, filt = None, debug=False):

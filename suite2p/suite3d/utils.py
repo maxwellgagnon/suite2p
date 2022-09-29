@@ -240,3 +240,39 @@ def build_ops(save_path, recording_params, other_params):
         print("Setting %s: %s" % (str(k), str(v)))
 
     return ops
+
+def create_shmem(shmem_params):
+    shmem = shared_memory.SharedMemory(create=True,size=shmem_params['nbytes'])
+    shmem_params['name'] = shmem.name
+    return shmem, shmem_params
+
+def create_shmem_from_arr(sample_arr, copy=False):
+    shmem_params = {
+        'dtype' : sample_arr.dtype,
+        'shape' : sample_arr.shape,
+        'nbytes' : sample_arr.nbytes
+         }
+    shmem, shmem_params = create_shmem(shmem_params)
+    sh_arr = n.ndarray(shmem_params['shape'], shmem_params['dtype'],
+                        buffer = shmem.buf)
+    if copy:
+        sh_arr[:] = sample_arr[:]
+    else:
+        sh_arr[:] = 0
+
+    return shmem, shmem_params, sh_arr
+
+def load_shmem(shmem_params):
+    shmem = shared_memory.SharedMemory(name=shmem_params['name'])
+    sh_arr = n.ndarray(shmem_params['shape'], shmem_params['dtype'],
+                        buffer = shmem.buf)
+    return shmem, sh_arr
+
+def close_shmem(shmem_params):
+    shmem = shared_memory.SharedMemory(name=shmem_params['name'])
+    shmem.close()
+def close_and_unlink_shmem(shmem_params):
+    if 'name' in shmem_params.keys():
+        shmem = shared_memory.SharedMemory(name=shmem_params['name'])
+        shmem.close()
+        shmem.unlink
