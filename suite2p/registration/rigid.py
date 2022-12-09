@@ -2,7 +2,7 @@ from typing import Tuple
 
 import numpy as np
 
-from .utils import convolve, complex_fft2, spatial_taper, addmultiply, gaussian_fft, temporal_smooth
+from .utils import convolve, convolve_faster, complex_fft2, spatial_taper, addmultiply, gaussian_fft, temporal_smooth
 
 import torch
 
@@ -64,7 +64,7 @@ def phasecorr_reference(refImg: np.ndarray, smooth_sigma=None) -> np.ndarray:
     cfRefImg *= gaussian_fft(smooth_sigma, cfRefImg.shape[0], cfRefImg.shape[1])
     return cfRefImg.astype('complex64')
 
-def phasecorr(data, cfRefImg, maxregshift, smooth_sigma_time) -> Tuple[int, int, float]:
+def phasecorr(data, cfRefImg, maxregshift, smooth_sigma_time, convolve_method='old') -> Tuple[int, int, float]:
     """ compute phase correlation between data and reference image
 
     Parameters
@@ -89,7 +89,17 @@ def phasecorr(data, cfRefImg, maxregshift, smooth_sigma_time) -> Tuple[int, int,
     min_dim = np.minimum(*data.shape[1:])  # maximum registration shift allowed
     lcorr = int(np.minimum(np.round(maxregshift * min_dim), min_dim // 2))
     
-    data = convolve(data, cfRefImg)
+    if convolve_method == 'fast_cpu': 
+        data = convolve_faster(data, cfRefImg)
+    elif convolve_method == 'old':  
+        data = convolve(data, cfRefImg)
+    elif convolve_method == 'part_gpu':
+        data = convolve_part_gpu(data, cfRefImg)
+    elif convolve_method == 'full_gpu':
+        data = convolve_full_gpu(data, cfRefImg)
+    elif convolve_method == 'tf_gpu':
+        data = convolve_tf_gpu(data, cfRefImg)
+
     cc = np.real(
             np.block(
                 [[data[:,  -lcorr:, -lcorr:], data[:,  -lcorr:, :lcorr+1]],

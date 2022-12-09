@@ -6,7 +6,7 @@ from numba import float32, njit, prange
 from numpy import fft
 from scipy.fftpack import next_fast_len
 
-from .utils import addmultiply, spatial_taper, gaussian_fft, kernelD2, mat_upsample, convolve
+from .utils import addmultiply, spatial_taper, gaussian_fft, kernelD2, mat_upsample, convolve, convolve_faster
 
 
 def calculate_nblocks(L: int, block_size: int = 128) -> Tuple[int, int]:
@@ -134,7 +134,8 @@ def getSNR(cc: np.ndarray, lcorr: int, lpad: int) -> float:
     return snr
 
 
-def phasecorr(data: np.ndarray, maskMul, maskOffset, cfRefImg, snr_thresh, NRsm, xblock, yblock, maxregshiftNR, subpixel: int = 10, lpad: int = 3):
+def phasecorr(data: np.ndarray, maskMul, maskOffset, cfRefImg, snr_thresh, NRsm, xblock, yblock, maxregshiftNR, subpixel: int = 10, lpad: int = 3,
+                convolve_method='old'):
     """
     Compute phase correlations for each block
     
@@ -179,7 +180,16 @@ def phasecorr(data: np.ndarray, maskMul, maskOffset, cfRefImg, snr_thresh, NRsm,
         yind, xind = yblock[n], xblock[n]
         Y[:,n] = data[:, yind[0]:yind[-1], xind[0]:xind[-1]]
     Y = addmultiply(Y, maskMul, maskOffset)
-    Y = convolve(mov=Y, img=cfRefImg)
+    if convolve_method == 'fast_cpu':
+        Y = convolve_faster(mov=Y, img= cfRefImg)
+    elif convolve_method == 'old':
+        Y = convolve(mov=Y, img=cfRefImg)
+    elif convolve_method == 'part_gpu':
+        Y = convolve_part_gpu(mov=Y, img=cfRefImg)
+    elif convolve_method == 'full_gpu':
+        Y = convolve_full_gpu(mov=Y, img=cfRefImg)
+    elif convolve_method == 'tf_gpu':
+        Y = convolve_tf_gpu(mov=Y, img=cfRefImg)
 
     # calculate ccsm
     lhalf = lcorr + lpad

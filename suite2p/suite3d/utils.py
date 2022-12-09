@@ -9,19 +9,37 @@ from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 import imreg_dft as imreg
 from multiprocessing import Pool, shared_memory
 from .. import default_ops
+import tensorflow as tf
+from tensorflow.keras.models import load_model
+from itertools import product
+from dask import array as darr
+from skimage.measure import moments
+from ..registration.nonrigid import make_blocks
 
+def make_blocks_3d(nz, ny, nx, block_shape, z_overlap=True):
+    ybls, xbls,(n_y_bls, n_x_bls), __, __ = make_blocks(ny, nx, block_size=block_shape[1:])
+    z_bl_starts = n.arange(0, nz - int(z_overlap), block_shape[0] - int(z_overlap))
+    zbls = n.stack([z_bl_starts, z_bl_starts + block_shape[0]],axis=1)
+    zbls[zbls > nz] = nz
+    n_z_bls = len(zbls)
+    grid_shape = (n_z_bls, n_y_bls, n_x_bls)
+    ybls = n.concatenate([ybls] * n_z_bls)
+    xbls = n.concatenate([xbls] * n_z_bls)
+    zbls = n.stack([zbls]*(n_y_bls * n_x_bls),axis=1).reshape(-1,2)
+    
+    return zbls, ybls, xbls, grid_shape
 
-def get_shifts_3d(im3d, n_procs = 12):
+def get_shifts_3d(im3d, n_procs = 12, filter_pcorr=0):
     sims = []
     i = 0
     p = Pool(n_procs)
-    sims = p.starmap(get_shifts_3d_worker, [(idx, im3d) for idx in range(im3d.shape[0]-1)])
+    sims = p.starmap(get_shifts_3d_worker, [(idx, im3d, filter_pcorr) for idx in range(im3d.shape[0]-1)])
     tvecs = n.array([sim['tvec'] for sim in sims])
     tvecs_cum = n.cumsum(tvecs,axis=0)
     return tvecs_cum
 
-def get_shifts_3d_worker(idx, im3d):
-    return imreg.similarity(im3d[idx], im3d[idx+1])
+def get_shifts_3d_worker(idx, im3d,filter_pcorr):
+    return imreg.similarity(im3d[idx], im3d[idx+1], filter_pcorr=filter_pcorr)
     
 def gaussian(x, mu, sigma):
     return n.exp(-0.5 * ((x - mu) / sigma) ** 2) / (sigma * n.sqrt(2*n.pi))
@@ -160,7 +178,7 @@ def register_movie(mov3d, tvecs = None, save_path = None, n_shift_proc=10):
     sh_mem_name = sh_mem.name
     p = Pool(n_shift_proc)
 
-    p.starmap(shift_movie_plane, [(idx, sh_mem_name, tvecs[idx-1], shape_mem, mov_reg.dtype) for idx in n.arange(1,n_planes)])
+    p.starmap(shift_movie_plane, [(idx, sh_mem_name, tvecs[idx], shape_mem, mov_reg.dtype) for idx in n.arange(1,n_planes)])
 
     im3d = mov_reg.mean(axis=1)
     mov_reg_ret = mov_reg.copy()
@@ -263,16 +281,59 @@ def create_shmem_from_arr(sample_arr, copy=False):
     return shmem, shmem_params, sh_arr
 
 def load_shmem(shmem_params):
-    shmem = shared_memory.SharedMemory(name=shmem_params['name'])
+    shmem = shared_memory.SharedMemory(name=shmem_params['name'], create=False)
     sh_arr = n.ndarray(shmem_params['shape'], shmem_params['dtype'],
                         buffer = shmem.buf)
     return shmem, sh_arr
 
 def close_shmem(shmem_params):
-    shmem = shared_memory.SharedMemory(name=shmem_params['name'])
+    shmem = shared_memory.SharedMemory(name=shmem_params['name'], create=False)
     shmem.close()
 def close_and_unlink_shmem(shmem_params):
+    print("Don't use me. I cause memory leaks :(")
     if 'name' in shmem_params.keys():
-        shmem = shared_memory.SharedMemory(name=shmem_params['name'])
+        shmem = shared_memory.SharedMemory(name=shmem_params['name'], create=False)
         shmem.close()
-        shmem.unlink
+        shmem.unlink()
+
+def get_centroid(ref_img_3d):
+    mean_im = ref_img_3d.mean(axis=0)
+    M = moments(mean_im, order=1)
+    centroid = (int(M[1, 0] / M[0, 0]), int(M[0, 1] / M[0, 0]))
+    return centroid
+def pad_crop_movie(mov, centroid, crop_size):
+    mov = mov[:,:,centroid[0]-crop_size[0]//2:centroid[0]+crop_size[0]//2,
+                    centroid[1]-crop_size[1]//2:centroid[1]+crop_size[1]//2]
+    nyy, nxx = mov.shape[2:]
+    pad = [(0,0), (0,0), (0,0), (0,0)]
+    do_pad = False
+    if nyy < crop_size[0]:
+        pad[2] = (0, crop_size[0] - nyy)
+        do_pad = True
+    if nxx < crop_size[1]:
+        pad[3] = (0, crop_size[1] - nxx)
+        do_pad = True
+    if do_pad:
+        mov = n.pad(mov, pad)
+    return mov
+    
+
+def npy_to_dask(files, name='', axis=1):
+    sample_mov = n.load(files[0], mmap_mode='r')
+    file_ts = ([n.load(f, mmap_mode='r').shape[axis] for f in files])
+    nz, nt_sample, ny, nx = sample_mov.shape
+
+    dtype = sample_mov.dtype
+    chunks = [(nz,), (nt_sample,), (ny,), (nx,)]
+    chunks[axis] = tuple(file_ts)
+    chunks = tuple(chunks)
+    name = 'from-npy-stack-%s' % name
+
+    keys = list(product([name], *[range(len(c)) for c in chunks]))
+    values = [(n.load, files[i], 'r') for i in range(len(chunks[axis]))]
+
+    dsk = dict(zip(keys, values))
+
+    arr = darr.Array(dsk, name, chunks, dtype)
+
+    return arr

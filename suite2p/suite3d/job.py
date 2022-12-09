@@ -1,9 +1,14 @@
+import tifffile
+from cmath import log
+import datetime
 import os
 import numpy as n
 from . import init_pass
+from . import utils as u3d 
+import psutil
 
 class Job:
-    def __init__(self, root_dir, job_id, params=None, tifs=None, exist_ok=False, verbosity=1, create=True):
+    def __init__(self, root_dir, job_id, params=None, tifs=None, exist_ok=False, verbosity=10, create=True):
         """Create a Job object that is a wrapper to manage files, current state, log etc.
 
         Args:
@@ -26,18 +31,33 @@ class Job:
             self.load_params()
             self.tifs = self.params.get('tifs', [])
             
+        self.save_params()
 
-
-    def log(self, string, level=1):
+    def log(self, string='', level=1, logfile=True, log_mem_usage=False):
         """Print messages based on current verbosity level
 
         Args:
             string (str): String to be printed
             level (int, optional): Level equal or below self.verbosity will be printed. Defaults to 1.
         """
+        if log_mem_usage:
+            
+            vm = psutil.virtual_memory()
+            sm = psutil.swap_memory()
+            total = sm.used + vm.used
+            string = "{:<20}".format(string)
+            string += ("Total Used: %07.3f GB, Virtual: %07.3f GB, Swap: %07.3f" %
+                       ((total/(1024**3), vm.used/(1024**3), sm.used/(1024**3))))
+            
         if level <= self.verbosity:
             # print('xxx')
             print(("   " * level) + string)
+        if logfile:
+            logfile = os.path.join(self.job_dir, 'log.txt')
+            with open(logfile, 'a+') as f:
+                datetime_string = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                header = '\n[%s][%02d] ' % (datetime_string, level)
+                f.write(header + '   ' * level + string)
 
     def save_params(self, new_params=None):
         """Update saved params in job_dir/params.npy
@@ -54,9 +74,39 @@ class Job:
         self.log("Found and loaded params from %s" % params_path)
 
     def load_summary(self):
-        summary_path = os.path.join(self.dirs['job_summary_dir'], 'summary.npy')
+        summary_path = os.path.join(self.dirs['summary'], 'summary.npy')
         summary = n.load(summary_path,  allow_pickle=True).item()
         return summary
+
+    def make_svd_dirs(self, n_blocks=None):
+        self.make_new_dir('svd')
+        self.make_new_dir('blocks', 'svd', dir_tag='svd_blocks')
+        block_dirs = []
+        if n_blocks is not None:
+            for i in range(n_blocks):
+                block_dirs.append(self.make_new_dir('%03d' % i, 'svd_blocks', dir_tag = 'svd_blocks_%03d' % i))
+            return block_dirs
+
+    def make_stack_dirs(self, n_stacks):
+        stack_dirs = []
+        self.make_new_dir('stacks', 'svd', dir_tag='svd_stacks')
+        for i in range(n_stacks):
+            stack_dirs.append(self.make_new_dir('%03d' % i, 'svd_stacks', dir_tag = 'svd_stacks_%03d' % i))
+        return stack_dirs
+
+    def make_new_dir(self, dir_name, parent_dir_name = None, exist_ok=True, dir_tag = None):
+        if parent_dir_name is None:
+            parent_dir = self.job_dir
+        else: 
+            parent_dir = self.dirs[parent_dir_name]
+        if dir_tag is None:
+            dir_tag = dir_name
+        
+        dir_path = os.path.join(parent_dir, dir_name)
+        os.makedirs(dir_path, exist_ok = exist_ok)
+        self.dirs[dir_tag] = dir_path
+        n.save(os.path.join(self.job_dir, 'dirs.npy'), self.dirs)
+        return dir_path
 
     def init_job_dir(self, root_dir, job_id, exist_ok=False, update_params=True):
         """Create a job directory and nested dirs
@@ -68,30 +118,109 @@ class Job:
         """
 
         job_dir = os.path.join(root_dir,'s3d-%s' % job_id)
+        self.job_dir = job_dir
         if os.path.isdir(job_dir):
             self.log("Job directory %s already exists" % job_dir, 0)
             assert exist_ok, "Manually delete job_dir, or set exist_ok=True"
+        else:
+            os.makedirs(job_dir, exist_ok=True)
 
+        self.log("Creating job directory for %s in %s" %
+                    (job_id, root_dir), 0)
         if 'dirs.npy' in os.listdir(job_dir):
             self.log("Loading dirs ")
             self.dirs = n.load(os.path.join(job_dir, 'dirs.npy'),allow_pickle=True).item()
-            return
+        else:
+            self.dirs = {'job_dir' : job_dir}
 
-        os.makedirs(job_dir, exist_ok=True)
-        job_summary_dir = os.path.join(job_dir,'summary')
-        os.makedirs(job_summary_dir, exist_ok=True)
-        job_reg_data_dir = os.path.join(job_dir,'registered_data')
-        os.makedirs(job_reg_data_dir, exist_ok=True)
-        job_iter_dir = os.path.join(job_dir,'registered_data')
-        os.makedirs(job_iter_dir, exist_ok=True)
+        if job_dir not in self.dirs.keys():
+            self.dirs['job_dir'] = job_dir
 
-        self.dirs = {}
-        self.dirs['job_dir'] = job_dir
-        self.dirs['job_summary_dir'] = job_summary_dir
-        self.dirs['job_reg_data_dir'] = job_reg_data_dir
-        self.dirs['job_iter_dir'] = job_iter_dir
+        for dir_name in ['registered_data', 'summary', 'iters']:
+            dir_key = dir_name
+            if dir_key not in self.dirs.keys():
+                new_dir = os.path.join(job_dir, dir_name) 
+                if not os.path.isdir(new_dir):
+                    os.makedirs(new_dir, exist_ok=True)
+                    self.log("Created dir %s" % new_dir,2)
+                else:
+                    self.log("Found dir %s" % new_dir,2)
+                self.dirs[dir_key] = new_dir
+                
+            else:
+                self.log("Found dir %s" % dir_name,2)
         n.save(os.path.join(job_dir, 'dirs.npy'), self.dirs)
 
     def run_init_pass(self):
         self.log("Launching initial pass", 0)
         init_pass.run_init_pass(self)
+    def get_registered_files(self, key='registered_data', filename_filter='reg_data'):
+        all_files = n.os.listdir(self.dirs[key])
+        reg_files = [os.path.join(self.dirs[key],x) for x in all_files if x.startswith(filename_filter)]
+        return reg_files
+    def get_denoised_files(self):
+        all_files = n.os.listdir(self.dirs['deepinterp'])
+        reg_files = [os.path.join(self.dirs['deepinterp'],x) for x in all_files if x.startswith('dp')]
+        return reg_files
+
+    def get_iter_dirs(self):
+        iters_dir = self.dirs['iters']
+        iter_dirs = [os.path.join(iters_dir, dir) for dir in os.listdir(iters_dir)]
+        ret = []
+        for dir in iter_dirs:
+            if 'vmap.npy' in os.listdir(dir):
+                ret.append(dir)
+        return ret
+    
+    def load_iter_results(self, iter_idx):
+        iter_dir = self.get_iter_dirs()[iter_idx]
+        self.log("Loading from %s" % iter_dir)
+        res = {
+            'vmap' : n.load(os.path.join(iter_dir, 'vmap.npy')),
+            'max_img' : n.load(os.path.join(iter_dir, 'max_img.npy')),
+            'mean_img' : n.load(os.path.join(iter_dir, 'mean_img.npy')),
+            'sum_img' : n.load(os.path.join(iter_dir, 'sum_img.npy')),
+        }
+        return res
+
+
+    def get_subtracted_movie(self):
+        mov_sub_paths = []
+        for d in self.get_iter_dirs():
+            if 'mov_sub.npy' in os.listdir(d):
+                mov_sub_paths.append(os.path.join(d, 'mov_sub.npy'))
+
+        mov_sub = u3d.npy_to_dask(mov_sub_paths, axis=0)
+        return mov_sub
+
+    def get_registered_movie(self, key='registered_data', filename_filter='reg_data'):
+            paths = self.get_registered_files(key, filename_filter)
+            mov_reg = u3d.npy_to_dask(paths, axis=1)
+            return mov_reg
+    def load_frame_counts(self):
+        return n.load(os.path.join(self.dirs['job_dir'],'frames.npy'), allow_pickle=True).item()
+
+    def save_frame_counts(self):
+        size_to_frames = {}
+        nframes = []
+        jobids = []
+        for tif in self.tifs:
+            jobids.append(int(tif.split('\\')[-2]))
+            tifsize = int(os.path.getsize(tif))
+            if tifsize in size_to_frames.keys():
+                nframes.append(size_to_frames[tifsize])
+            else:
+                tf = tifffile.TiffFile(tif)
+                nf = len(tf.pages) // 30
+                nframes.append(nf)
+                size_to_frames[tifsize] = nf
+                self.log(tif +  ' is %d frames and %d bytes' % (nf, tifsize))
+
+        nframes = n.array(nframes)
+        jobids = n.array(jobids)
+
+        tosave = {'nframes' : nframes, 'jobids' : jobids}
+        self.frames = tosave
+        n.save(os.path.join(self.dirs['job_dir'],'frames.npy'), tosave)
+
+        return nframes, jobids

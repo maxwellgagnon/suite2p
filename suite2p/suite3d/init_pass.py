@@ -12,7 +12,7 @@ def default_log(string, val):
 def choose_init_tifs(tifs, n_init_files, init_file_pool_lims=None, method='even', seed=2358):
 
     init_file_pool = []
-    if init_file_pool is not None:
+    if init_file_pool_lims is not None:
         for limits in init_file_pool_lims:
             init_file_pool += tifs[limits[0]:limits[1]]
     else:
@@ -37,7 +37,7 @@ def load_init_tifs(init_tifs, planes, filter_params):
 
     return full_mov
 
-def prep_registration(full_mov, reg_ops, log_callback=default_log):
+def prep_registration(full_mov, reg_ops, log_callback=default_log, filter_pcorr=0):
     nz, nt, ny, nx = full_mov.shape
     ref_img_3d = []
     log_callback("Computing reference images")
@@ -47,7 +47,8 @@ def prep_registration(full_mov, reg_ops, log_callback=default_log):
         log_callback("  Computed reference for plane %d" % i,2)
     ref_img_3d = n.array(ref_img_3d)
 
-    tvecs = n.concatenate([[[0,0]], utils.get_shifts_3d(ref_img_3d)])
+    tvecs = n.concatenate([[[0,0]], utils.get_shifts_3d(ref_img_3d, filter_pcorr=filter_pcorr)])
+    log_callback("Tvecs: %s" % str(tvecs), 2)
 
     ref_img_3d_aligned = utils.register_movie(ref_img_3d[:,n.newaxis], tvecs=tvecs)[:,0]
 
@@ -87,6 +88,12 @@ def run_init_pass(job):
     tifs = job.tifs
     params = job.params
 
+    summary_path = os.path.join(job.dirs['summary'], 'summary.npy')
+    job.log("Saving summary to %s" % summary_path,0)
+    if not os.path.isdir(job.dirs['summary']):
+        job.log("Summary dir does not exist!!")
+        assert False
+
     init_tifs = choose_init_tifs(tifs, params['n_init_files'], params['init_file_pool'], 
                                        params['init_file_sample_method'])
     init_mov = load_init_tifs(init_tifs, params['planes'], params['notch_filt'])
@@ -123,22 +130,24 @@ def run_init_pass(job):
                                         'nonrigid' : job.params['nonrigid']})
 
     job.log("Aligning planes and calculating reference images")
-    tvecs, ref_img_3d, all_ops, all_refs_masks = prep_registration(init_mov, reg_ops, job.log)
+    tvecs, ref_img_3d, all_ops, all_refs_masks = prep_registration(init_mov, reg_ops, job.log, filter_pcorr=params['reg_filter_pcorr'])
 
     summary = {
         'ref_img_3d' : ref_img_3d,
         'crosstalk_coeff' : cross_coeff,
         'plane_shifts' : tvecs,
         'refs_and_masks' : all_refs_masks,
-        'all_ops' : all_ops
+        'all_ops' : all_ops,
+        'plane_mean' : init_mov.mean(axis=(1,2,3)),
+        'plane_std' : init_mov.std(axis=(1,2,3)),
     }
-    summary_path = os.path.join(job.summary_dir, 'summary.npy')
+    summary_path = os.path.join(job.dirs['summary'], 'summary.npy')
     job.log("Saving summary to %s" % summary_path)
     n.save(summary_path, summary)
 
     if job.params['generate_sample_registered_bins']:
-        sample_bin_path = os.path.join(job.summary_dir, 'sample_reg_movie.npy')
-        sample_off_path = os.path.join(job.summary_dir, 'sample_offsets.npy')
+        sample_bin_path = os.path.join(job.dirs['summary'], 'sample_reg_movie.npy')
+        sample_off_path = os.path.join(job.dirs['summary'], 'sample_offsets.npy')
         job.log("Registering sample files and saving them to %s for verification" % sample_bin_path)
         job.log("Offsets will be saved in summary.npy")
 
@@ -149,4 +158,4 @@ def run_init_pass(job):
         n.save(summary_path, summary)
 
 
-    job.log("Initial pass complete. See %s for details" % job.summary_dir)
+    job.log("Initial pass complete. See %s for details" % job.dirs['summary'])

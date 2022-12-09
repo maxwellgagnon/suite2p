@@ -190,7 +190,7 @@ def compute_reference_masks(refImg, ops=None):
 
     return maskMul, maskOffset, cfRefImg, maskMulNR, maskOffsetNR, cfRefImgNR
 
-def register_frames(refAndMasks, frames, ops=None, base_shift=None):
+def register_frames(refAndMasks, frames, ops=None, base_shift=None, convolve_method='old', do_rigid=True):
     """ register frames to reference image 
     
     Parameters
@@ -242,19 +242,23 @@ def register_frames(refAndMasks, frames, ops=None, base_shift=None):
     # rigid registration
     if ops.get('norm_frames', False):
         fsmooth = np.clip(fsmooth, ops['rmin'], ops['rmax'])
-    ymax, xmax, cmax = rigid.phasecorr(
-        data=rigid.apply_masks(data=fsmooth, maskMul=maskMul, maskOffset=maskOffset),
-        cfRefImg=cfRefImg,
-        maxregshift=ops['maxregshift'],
-        smooth_sigma_time=ops['smooth_sigma_time'],
-    )
-    if base_shift is not None:
-        if ops['nonrigid']: print("base_shift with nonrigid on is broken!")
-        ymax += base_shift[0]
-        xmax += base_shift[1]
+    
+    if do_rigid:
+        ymax, xmax, cmax = rigid.phasecorr(
+            data=rigid.apply_masks(data=fsmooth, maskMul=maskMul, maskOffset=maskOffset),
+            cfRefImg=cfRefImg,
+            maxregshift=ops['maxregshift'],
+            smooth_sigma_time=ops['smooth_sigma_time'], convolve_method=convolve_method,
+        )
+        if base_shift is not None:
+            if ops['nonrigid']: print("base_shift with nonrigid on is broken!")
+            ymax += base_shift[0]
+            xmax += base_shift[1]
 
-    for frame, dy, dx in zip(frames, ymax, xmax):
-        frame[:] = rigid.shift_frame(frame=frame, dy=dy, dx=dx)
+        for frame, dy, dx in zip(frames, ymax, xmax):
+            frame[:] = rigid.shift_frame(frame=frame, dy=dy, dx=dx)
+    else:
+        ymax = None; xmax = None; cmax = None;
 
     # non-rigid registration
     if ops['nonrigid']:
@@ -278,6 +282,7 @@ def register_frames(refAndMasks, frames, ops=None, base_shift=None):
             xblock=ops['xblock'],
             yblock=ops['yblock'],
             maxregshiftNR=ops['maxregshiftNR'],
+            convolve_method=convolve_method
         )
 
         frames = nonrigid.transform_data(

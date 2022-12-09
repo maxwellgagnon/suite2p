@@ -5,22 +5,23 @@ from typing import Dict, Any
 
 from . import sourcery, sparsedetect, chan2detect, utils
 from .stats import roi_stats
-from .denoise import pca_denoise
+# from .denoise import pca_denoise
 from ..io.binary import BinaryFile
 from ..classification import classify, user_classfile
 
-try:
-    from . import anatomical
-    CELLPOSE_INSTALLED = True
-except Exception as e:
-    print('Warning: cellpose did not import')
-    print(e)
-    print('cannot use anatomical mode, but otherwise suite2p will run normally')
-    CELLPOSE_INSTALLED = False
+# try:
+#     from . import anatomical
+#     CELLPOSE_INSTALLED = True
+# except Exception as e:
+#     print('Warning: cellpose did not import')
+#     print(e)
+#     print('cannot use anatomical mode, but otherwise suite2p will run normally')
+CELLPOSE_INSTALLED = False
 
 
 def detect(ops, classfile=None):
-    
+    if ops.get('denoise', 1):
+        from .denoise import pca_denoise
     if 'aspect' in ops:
         dy, dx = int(ops['aspect'] * 10), 10
     else:

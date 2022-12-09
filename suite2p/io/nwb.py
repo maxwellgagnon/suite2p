@@ -11,20 +11,21 @@ from ..detection.stats import roi_stats
 from . import utils
 from .. import run_s2p
 
-try:
-    from pynwb import NWBFile
-    from pynwb.base import Images
-    from pynwb.image import GrayscaleImage
-    from pynwb.device import Device
-    from pynwb.ophys import OpticalChannel
-    from pynwb.ophys import TwoPhotonSeries
-    from pynwb.ophys import ImageSegmentation
-    from pynwb.ophys import RoiResponseSeries
-    from pynwb.ophys import Fluorescence
-    from pynwb import NWBHDF5IO
-    NWB = True
-except ModuleNotFoundError:
-    NWB = False
+# try:
+#     from pynwb import NWBFile
+#     from pynwb.base import Images
+#     from pynwb.image import GrayscaleImage
+#     from pynwb.device import Device
+#     from pynwb.ophys import OpticalChannel
+#     from pynwb.ophys import TwoPhotonSeries
+#     from pynwb.ophys import ImageSegmentation
+#     from pynwb.ophys import RoiResponseSeries
+#     from pynwb.ophys import Fluorescence
+#     from pynwb import NWBHDF5IO
+#     NWB = True
+# except ModuleNotFoundError:
+#     NWB = False
+NWB = False
 
 
 def nwb_to_binary(ops):

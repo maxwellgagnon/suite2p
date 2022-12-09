@@ -7,35 +7,12 @@ from numba import vectorize, complex64
 from numpy.fft import ifftshift#, fft2, ifft2
 from scipy.fft import next_fast_len#, fft2, ifft2
 from scipy.ndimage import gaussian_filter1d
-import torch
+from torch import from_numpy
+from torch.fft import fft2 as torch_fft2
+from torch.fft import ifft2 as torch_ifft2
 
-# there are two formats of fft
-try:
-    # pytorch > 1.7
-    from torch.fft import fft as torch_fft 
-    from torch.fft import ifft as torch_ifft 
-except:
-    # pytorch <= 1.7
-    from torch import fft as torch_fft 
-    from torch import ifft as torch_ifft 
+from mkl_fft import fft2, ifft2
 
-def fft2(data, size=None):
-    """ compute fft2 over last two dimensions using pytorch
-    size (padding) is not used
-    """
-    data_torch = torch.from_numpy(data)
-    data2 = torch_fft(data_torch, dim=-1)
-    data2 = torch_fft(data2, dim=-2)
-    return data2.cpu().numpy()
-
-def ifft2(data, size=None):
-    """ compute ifft2 over last two dimensions using pytorch
-    size (padding) is not used
-    """
-    data_torch = torch.from_numpy(data)
-    data2 = torch_ifft(data_torch, dim=-1)
-    data2 = torch_ifft(data2, dim=-2)
-    return data2.cpu().numpy()
 
 #try:
 #    from mkl_fft import fft2, ifft2
@@ -232,6 +209,52 @@ def convolve(mov: np.ndarray, img: np.ndarray) -> np.ndarray:
     convolved_data: nImg x Ly x Lx
     """
     return ifft2(apply_dotnorm(fft2(mov), img)) #.astype(np.complex64)
+
+def convolve_faster(mov: np.ndarray, img: np.ndarray) -> np.ndarray:
+    """
+    Returns the 3D array 'mov' convolved by a 2D array 'img'.
+
+    Parameters
+    ----------
+    mov: nImg x Ly x Lx
+        The frames to process
+    img: 2D array
+        The convolution kernel
+
+    Returns
+    -------
+    convolved_data: nImg x Ly x Lx
+    """
+    mov_torch = from_numpy(mov)
+    mov_f = torch_fft2(mov_torch).cpu().numpy()
+    normed_f = apply_dotnorm(mov_f, img)
+    normed_f_torch = from_numpy(normed_f)
+    normed_torch_cpu = torch_ifft2(normed_f_torch).cpu().numpy()
+    return normed_torch_cpu
+
+# def convolve_full_gpu(mov: np.ndarray, img: np.ndarray) -> np.ndarray:
+#     mov_torch = torch.from_numpy(mov).to('cuda').type(torch.complex64)
+#     ref_torch = torch.from_numpy(img).to('cuda')
+#     mov_f = torch.fft.fft2(mov_torch)
+#     normed_f_torch = mov_f / (torch.abs(mov_f)) * ref_torch
+#     normed_torch_full_gpu = torch.fft.ifft2(normed_f_torch).real.cpu().numpy()
+#     return normed_torch_full_gpu
+
+# def convolve_part_gpu(mov: np.ndarray, img: np.ndarray) -> np.ndarray:
+#     mov_torch = torch.from_numpy(mov).to('cuda')
+#     mov_f = torch.fft.fft2(mov_torch).cpu().numpy()
+#     normed_f = apply_dotnorm(mov_f, img)
+#     normed_f_torch = torch.from_numpy(normed_f).to('cuda')
+#     normed_torch_partial_gpu = torch.fft.ifft2(normed_f_torch).cpu().numpy()
+#     return normed_torch_partial_gpu
+
+# def convolve_tf_gpu(mov: np.ndarray, img: np.ndarray) -> np.ndarray:
+#     mov_tf = tf.convert_to_tensor(mov)
+#     ref_tf = tf.convert_to_tensor(img)
+#     mov_tf_f = tf.signal.fft2d(mov_tf)
+#     normed_mov_f = mov_tf_f / tf.cast(tf.math.abs(mov_tf_f), tf.complex64) * ref_tf
+#     normed_mov = tf.signal.ifft2d(normed_mov_f).numpy()
+#     return normed_mov
 
 
 def complex_fft2(img: np.ndarray, pad_fft: bool = False) -> np.ndarray:

@@ -1,3 +1,4 @@
+from inspect import trace
 import os
 from multiprocessing import shared_memory, Pool
 import numpy as n
@@ -7,13 +8,15 @@ from scipy import signal
 import tifffile
 import imreg_dft as imreg
 import json
+import psutil
+import tracemalloc
 
-def default_log(string, val): print(string)
+def default_log(string, val=None): print(string)
 lbm_plane_to_ch = n.array([1,5,6,7,8,9,2,10,11,12,13,14,15,16,17,3,18,19,20,21,22,23,4,24,25,26,27,28,29,30])-1
 lbm_ch_to_plane = n.array(n.argsort(lbm_plane_to_ch))
 
 def load_and_stitch_tifs(paths, planes, verbose=True,n_proc=15, mp_args = {}, filt=None, concat=True,
-                         convert_plane_ids_to_channel_ids = True, log_cb=default_log):
+                         convert_plane_ids_to_channel_ids = True, log_cb=default_log, debug=False):
 
     if convert_plane_ids_to_channel_ids:
         channels = lbm_plane_to_ch[n.array(planes)]
@@ -23,7 +26,7 @@ def load_and_stitch_tifs(paths, planes, verbose=True,n_proc=15, mp_args = {}, fi
     mov_list = []
     for tif_path in paths:
         if verbose: log_cb("Loading %s" % tif_path, 2)
-        im, px, py = load_and_stitch_full_tif_mp(tif_path, channels=channels, verbose=False, filt=filt, n_proc=n_proc, **mp_args)
+        im, px, py = load_and_stitch_full_tif_mp(tif_path, channels=channels, verbose=False, filt=filt, n_proc=n_proc,debug=debug, **mp_args)
         mov_list.append(im)
     if concat:
         mov = n.concatenate(mov_list,axis=1)
@@ -34,16 +37,36 @@ def load_and_stitch_tifs(paths, planes, verbose=True,n_proc=15, mp_args = {}, fi
     if verbose: log_cb("Loaded %d files, total %.2f GB" % (len(paths),size),1)
     return mov
 
-def load_and_stitch_full_tif_mp(path, channels, n_proc=10, verbose=True,translations=None, filt = None, debug=False):
+
+def load_and_stitch_full_tif_mp(path, channels, n_proc=10, verbose=True,translations=None, filt = None, debug=False, get_roi_start_pix=False):
     tic = time.time()
+    if debug: 
+        print(psutil.virtual_memory())
+        tracemalloc.start()
+        tracemalloc.clear_traces()
+        cur, peak = tracemalloc.get_traced_memory()
+        print("Current Memory: %09.6f GB, Peak: %09.6f GB" % (cur/(1024**3), peak/(1024**3)))
     # TODO imread from tifffile has an overhead of ~20-30 seconds before it actually reads the file?
-    tiffile = skio.imread(path)
-    if debug: print("1, %.4f" % (time.time()-tic))
+    tiffile = tifffile.imread(path)
+    if debug: 
+        print(psutil.virtual_memory())
+        print("1, %.4f" % (time.time()-tic))
+        cur, peak = tracemalloc.get_traced_memory()
+        print("Current Memory: %09.6f GB, Peak: %09.6f GB" % (cur/(1024**3), peak/(1024**3)))
     rois = get_meso_rois(path)
-    if debug: print("2, %.4f" % (time.time()-tic))
+    if debug: 
+        print(psutil.virtual_memory())
+        print("2, %.4f" % (time.time()-tic))
+        cur, peak = tracemalloc.get_traced_memory()
+        print("Current Memory: %09.6f GB, Peak: %09.6f GB" % (cur/(1024**3), peak/(1024**3)))
+        print(tiffile.nbytes, (tiffile.nbytes/(1024**3)))
     sh_mem = shared_memory.SharedMemory(create=True, size=tiffile.nbytes)
     sh_tif = n.ndarray(tiffile.shape, dtype=tiffile.dtype, buffer=sh_mem.buf)
-    if debug: print("3, %.4f" % (time.time()-tic))
+    if debug: 
+        print(psutil.virtual_memory())
+        print("3, %.4f" % (time.time()-tic))
+        cur, peak = tracemalloc.get_traced_memory()
+        print("Current Memory: %09.6f GB, Peak: %09.6f GB" % (cur/(1024**3), peak/(1024**3)))
     sh_tif[:] = tiffile[:]
     if debug: print("4, %.4f" % (time.time()-tic))
     sh_mem_name = sh_mem.name
@@ -56,6 +79,8 @@ def load_and_stitch_full_tif_mp(path, channels, n_proc=10, verbose=True,translat
     ims_sample= split_rois_from_tif(tiffile[:2], rois, ch_id=0)
     if debug: print("5, %.4f" % (time.time()-tic))
     # sample_out = stitch_rois(ims_sample, rois, return_coords=False,mean_img=False)
+    if get_roi_start_pix:
+        return stitch_rois_fast(ims_sample, rois, mean_img=False, get_roi_start_pix=True)
     sample_out, px, py = stitch_rois_fast(ims_sample, rois,mean_img=False)
     if debug: print("6, %.4f" % (time.time()-tic))
     __, n_y, n_x = sample_out.shape
@@ -89,6 +114,8 @@ def load_and_stitch_full_tif_mp(path, channels, n_proc=10, verbose=True,translat
     if verbose: print("    Total time: %.2f sec" % (time.time()-tic))
     sh_mem.close()
     sh_mem.unlink()
+    p.close()
+    p.terminate()
 
     im_full = n.zeros(sh_out.shape, sh_out.dtype)
     im_full[:] = sh_out[:]
@@ -190,12 +217,8 @@ def split_rois_from_tif(im, rois, ch_id = 0, return_coords=False):
     return split_ims
 
 
-def stitch_rois_fast(ims, rois, mean_img=False, translation = None):
+def stitch_rois_fast(ims, rois, mean_img=False, translation = None, get_roi_start_pix=False):
     tic = time.time()
-    if mean_img:
-        n_t = 1
-    else:
-        n_t = ims[0].shape[0]
 
     sizes_pix = n.array([im.shape[1:][::-1] for im in ims])
 
@@ -221,8 +244,6 @@ def stitch_rois_fast(ims, rois, mean_img=False, translation = None):
     # SI unit coordinates of each pixel of the full image
     full_xs = n.arange(xmin,xmax, psize_x)
     full_ys = n.arange(ymin,ymax, psize_y)
-
-    full_image = n.zeros((n_t, len(full_ys), len(full_xs)))
     # accumulate how many times a value is written into each pixel
 #     if accumulate: full_image_acc = n.zeros(full_image.shape[1:])
 
@@ -248,6 +269,17 @@ def stitch_rois_fast(ims, rois, mean_img=False, translation = None):
                   (roi_idx, closest_y, y_corner))
             
     prep_tic = time.time()
+
+    if get_roi_start_pix:
+        return roi_start_pix_y, roi_start_pix_x
+
+    if mean_img:
+        n_t = 1
+    else:
+        n_t = ims[0].shape[0]
+
+    full_image = n.zeros((n_t, len(full_ys), len(full_xs)))
+
     stitch_rois_fast_helper(full_image, ims, n.array(roi_start_pix_x), n.array(roi_start_pix_y), sizes_pix, mean_img)
 
     if translation is not None and n.linalg.norm(translation) > 0.01:

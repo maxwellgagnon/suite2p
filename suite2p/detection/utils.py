@@ -156,7 +156,7 @@ def hp_rolling_mean_filter(mov: np.ndarray, width: int, copy=True) -> np.ndarray
     """
     if copy: mov = mov.copy()
     for i in range(0, mov.shape[0], width):
-        mov[i:i + width, :, :] -= mov[i:i + width, :, :].mean(axis=0)
+        mov[i:i + width,] -= mov[i:i + width].mean(axis=0)
     return mov
 
 
