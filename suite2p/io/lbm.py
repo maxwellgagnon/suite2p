@@ -17,6 +17,26 @@ lbm_ch_to_plane = n.array(n.argsort(lbm_plane_to_ch))
 
 def load_and_stitch_tifs(paths, planes, verbose=True,n_proc=15, mp_args = {}, filt=None, concat=True,
                          convert_plane_ids_to_channel_ids = True, log_cb=default_log, debug=False):
+    '''
+    Load tifs into memory
+
+    Args:
+        paths (list): list of absolutep aths to tiff files
+        planes (list): planes to load, 0 being deepest and 30 being shallowest
+        verbose (bool, optional): Verbosity. Defaults to True.
+        n_proc (int, optional): Number of processors. Defaults to 15.
+        mp_args (dict, optional): args to pass to worker. Defaults to {}.
+        filt (tuple, optional): parameters of spatiotemporal filter. Defaults to None.
+        concat (bool, optional): Concatenate across time. Defaults to True.
+        convert_plane_ids_to_channel_ids (bool, optional): Convert the plane_ids to account for scanimage ordering. Set to False to access planes by their scanimage channel ID. Defaults to True.
+        log_cb (func, optional): Callback function for logging. Defaults to default_log.
+        debug (bool, optional): Debugging mode. Defaults to False.
+
+    Returns:
+        _type_: _description_
+    '''
+    
+
 
     if convert_plane_ids_to_channel_ids:
         channels = lbm_plane_to_ch[n.array(planes)]
