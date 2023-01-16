@@ -60,33 +60,14 @@ def load_and_stitch_tifs(paths, planes, verbose=True,n_proc=15, mp_args = {}, fi
 
 def load_and_stitch_full_tif_mp(path, channels, n_proc=10, verbose=True,translations=None, filt = None, debug=False, get_roi_start_pix=False):
     tic = time.time()
-    if debug: 
-        print(psutil.virtual_memory())
-        tracemalloc.start()
-        tracemalloc.clear_traces()
-        cur, peak = tracemalloc.get_traced_memory()
-        print("Current Memory: %09.6f GB, Peak: %09.6f GB" % (cur/(1024**3), peak/(1024**3)))
+
     # TODO imread from tifffile has an overhead of ~20-30 seconds before it actually reads the file?
     tiffile = tifffile.imread(path)
-    if debug: 
-        print(psutil.virtual_memory())
-        print("1, %.4f" % (time.time()-tic))
-        cur, peak = tracemalloc.get_traced_memory()
-        print("Current Memory: %09.6f GB, Peak: %09.6f GB" % (cur/(1024**3), peak/(1024**3)))
+  
     rois = get_meso_rois(path)
-    if debug: 
-        print(psutil.virtual_memory())
-        print("2, %.4f" % (time.time()-tic))
-        cur, peak = tracemalloc.get_traced_memory()
-        print("Current Memory: %09.6f GB, Peak: %09.6f GB" % (cur/(1024**3), peak/(1024**3)))
-        print(tiffile.nbytes, (tiffile.nbytes/(1024**3)))
+  
     sh_mem = shared_memory.SharedMemory(create=True, size=tiffile.nbytes)
     sh_tif = n.ndarray(tiffile.shape, dtype=tiffile.dtype, buffer=sh_mem.buf)
-    if debug: 
-        print(psutil.virtual_memory())
-        print("3, %.4f" % (time.time()-tic))
-        cur, peak = tracemalloc.get_traced_memory()
-        print("Current Memory: %09.6f GB, Peak: %09.6f GB" % (cur/(1024**3), peak/(1024**3)))
     sh_tif[:] = tiffile[:]
     if debug: print("4, %.4f" % (time.time()-tic))
     sh_mem_name = sh_mem.name

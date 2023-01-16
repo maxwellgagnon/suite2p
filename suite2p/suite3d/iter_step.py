@@ -114,9 +114,9 @@ def register_mov(mov3d, refs_and_masks, all_ops, log_cb = default_log, convolve_
         all_offsets['xms'].append(xm); all_offsets['yms'].append(ym); all_offsets['cms'].append(cm)
         all_offsets['xm1s'].append(xm1); all_offsets['ym1s'].append(ym1); all_offsets['cm1s'].append(cm1)
     return all_offsets
-        
+     
 
-def fuse_and_save_reg_file(reg_file, reg_fused_dir, centers, shift_xs, nshift, nbuf, crops=None, mov=None):
+def fuse_and_save_reg_file(reg_file, reg_fused_dir, centers, shift_xs, nshift, nbuf, crops=None, mov=None, save=True):
     file_name = reg_file.split('\\')[-1]
     fused_file_name = os.path.join(reg_fused_dir, 'fused_' + file_name)
     if mov is None: 
@@ -147,8 +147,9 @@ def fuse_and_save_reg_file(reg_file, reg_fused_dir, centers, shift_xs, nshift, n
         mov_fused[zidx, :, :, curr_x_new:] = mov[zidx, :, :, curr_x:]
     if crops is not None:
         mov_fused = mov_fused[crops[0][0]:crops[0][1], :, crops[1][0]:crops[1][1], crops[2][0]:crops[2][1]]
-    n.save(fused_file_name, mov_fused)
-    return fused_file_name
+    if save: n.save(fused_file_name, mov_fused)
+        return fused_file_name
+    else: return mov_fused
 
 
 def init_batch_files(job_iter_dir, job_reg_data_dir, n_batches):
@@ -198,9 +199,9 @@ def subtract_crosstalk_worker(shmem_params, coeff, deep_plane_idx, shallow_plane
     
 
 
-def iter_dataset(tifs, params, dirs, summary, log_cb = default_log,
+def register_dataset(tifs, params, dirs, summary, log_cb = default_log,
                     override_input_reg_bins=None, save_output=True, n_proc_detection=10,
-                    mem_profile=False, mem_profile_save_dir=None, debug_on_ones=False, do_detection=True, start_batch_idx = 0):
+                    mem_profile=False, mem_profile_save_dir=None, debug_on_ones=False, do_detection=False, start_batch_idx = 0):
     if not save_output:
         log_cb("Not saving outputs to file",0)
     if mem_profile:
@@ -231,6 +232,7 @@ def iter_dataset(tifs, params, dirs, summary, log_cb = default_log,
     unif_filter_xy = params['detection_unif_filter_xy']
     unif_filter_z = params['detection_unif_filter_z']
     intensity_thresh = params['intensity_threshold']
+    fuse = params.get('fuse_after_registration',False)
 
     do_deepinterp = params.get('do_deepinterp', False)
     model_path = params.get('model_path', None)
@@ -279,6 +281,12 @@ def iter_dataset(tifs, params, dirs, summary, log_cb = default_log,
         mallocs.append(tracemalloc.take_snapshot())
         malloc_labels.append("Before first batch")
 
+    if fuse:
+        __, fuse_xs = lbmio.load_and_stitch_full_tif_mp(tifs[0], channels=n.arange(1), get_roi_start_pix=True)
+        fuse_centers = n.sort(fuse_xs)[1:]
+        fuse_shift_xs = summary['plane_shifts'][:,1].astype(int)
+        fuse_nshift = params['fuse_nshift']
+        fuse_nbuf = params['fuse_nbuf']
     loaded_movs = [0]
 
     if not load_from_binary:
@@ -324,8 +332,15 @@ def iter_dataset(tifs, params, dirs, summary, log_cb = default_log,
                 log_cb("Before Reg:", level=3,log_mem_usage=True )
                 all_offsets = register_mov(mov,refs_and_masks, all_ops, log_cb)
                 
+                
                 log_cb("After reg:", level=3,log_mem_usage=True )
-                n.save(reg_data_path, mov)
+                
+                if fuse:
+                    fuse_and_save_reg_file(reg_data_path,'\\'.join(reg_data_path.split('\\')[:-1]), mov=mov,
+                    centers=fuse_centers, shift_xs=fuse_shift_xs, nshift=fuse_nshift, nbuf=fuse_nbuf)
+                else:
+                    n.save(reg_data_path, mov)
+
                 n.save(os.path.join(iter_dir, 'all_offsets.npy'), all_offsets)
                 del all_offsets
                 
@@ -405,7 +420,7 @@ def iter_dataset(tifs, params, dirs, summary, log_cb = default_log,
             n_frames_proc = n_frames_proc_new
 
             log_cb("Iteration complete",1)
-            if save_output:
+            if save_output and do_detection:
                 log_cb("Saving outputs to %s" % iter_dir, 1)
                 n.save(os.path.join(iter_dir, 'vmap.npy'), vmap)
                 # n.save(os.path.join(iter_dir, 'mov_sub.npy'), mov3d)

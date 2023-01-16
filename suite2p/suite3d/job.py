@@ -6,6 +6,9 @@ import numpy as n
 from . import init_pass
 from . import utils as u3d 
 import psutil
+from suite2p.io import lbm as lbmio
+from multiprocessing import Pool
+from suite2p.suite3d.iter_step import fuse_and_save_reg_file
 
 class Job:
     def __init__(self, root_dir, job_id, params=None, tifs=None, exist_ok=False, verbosity=10, create=True):
@@ -32,6 +35,19 @@ class Job:
             self.tifs = self.params.get('tifs', [])
             
         self.save_params()
+               
+    def fuse_registered_movie(self, n_buf, n_shift, files=None, save=False, n_proc=4):
+        if files is None:
+            files = self.get_registered_files()
+        __, xs = lbmio.load_and_stitch_full_tif_mp(self.tifs[0], channels=n.arange(1), get_roi_start_pix=True)
+        centers = n.sort(xs)[1:]
+        shift_xs = n.round(self.load_summary()['plane_shifts'][:,1]).astype(int)
+        if save:
+            reg_fused_dir = self.make_new_dir('registered_fused_data')
+        else: reg_fused_dir = ''
+        with Pool(n_proc) as p:
+            fused_files = p.starmap(fuse_and_save_reg_file, [(file, reg_fused_dir, centers,  shift_xs, n_buf, n_shift, None, None, save) for file in files])
+        return fused_files
 
     def log(self, string='', level=1, logfile=True, log_mem_usage=False):
         """Print messages based on current verbosity level
@@ -197,8 +213,10 @@ class Job:
             paths = self.get_registered_files(key, filename_filter)
             mov_reg = u3d.npy_to_dask(paths, axis=1)
             return mov_reg
+
     def load_frame_counts(self):
         return n.load(os.path.join(self.dirs['job_dir'],'frames.npy'), allow_pickle=True).item()
+
 
     def save_frame_counts(self):
         size_to_frames = {}
