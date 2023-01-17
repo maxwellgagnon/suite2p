@@ -147,7 +147,8 @@ def fuse_and_save_reg_file(reg_file, reg_fused_dir, centers, shift_xs, nshift, n
         mov_fused[zidx, :, :, curr_x_new:] = mov[zidx, :, :, curr_x:]
     if crops is not None:
         mov_fused = mov_fused[crops[0][0]:crops[0][1], :, crops[1][0]:crops[1][1], crops[2][0]:crops[2][1]]
-    if save: n.save(fused_file_name, mov_fused)
+    if save: 
+        n.save(fused_file_name, mov_fused)
         return fused_file_name
     else: return mov_fused
 

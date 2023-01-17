@@ -47,6 +47,8 @@ class Job:
         else: reg_fused_dir = ''
         with Pool(n_proc) as p:
             fused_files = p.starmap(fuse_and_save_reg_file, [(file, reg_fused_dir, centers,  shift_xs, n_buf, n_shift, None, None, save) for file in files])
+        if not save:
+            fused_files = n.concatenate(fused_files, axis=1)
         return fused_files
 
     def log(self, string='', level=1, logfile=True, log_mem_usage=False):
