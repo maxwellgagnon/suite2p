@@ -217,7 +217,7 @@ def register_dataset(tifs, params, dirs, summary, log_cb = default_log,
 
     job_iter_dir = dirs['iters']
     job_reg_data_dir = dirs['registered_data']
-    job_deepinterp_dir = dirs['deepinterp']
+    job_deepinterp_dir = dirs.get('deepinterp', None)
 
     n_tifs_to_analyze = params['total_tifs_to_analyze']
     tif_batch_size = params['tif_batch_size']
@@ -311,7 +311,7 @@ def register_dataset(tifs, params, dirs, summary, log_cb = default_log,
             log_cb("Start Batch: ", level=3,log_mem_usage=True )
             iter_dir = batch_dirs[batch_idx]
             reg_data_path = reg_data_paths[batch_idx]
-            log_cb("Loading Batch %d of %d" % (batch_idx, n_batches), 0)
+            log_cb("Loading Batch %d of %d" % (batch_idx+1, n_batches), 0)
             if not load_from_binary:
                 io_thread.join()
                 log_cb("Batch %d IO thread joined" % (batch_idx))

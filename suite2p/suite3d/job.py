@@ -72,6 +72,7 @@ class Job:
             print(("   " * level) + string)
         if logfile:
             logfile = os.path.join(self.job_dir, 'log.txt')
+            self.logfile = logfile
             with open(logfile, 'a+') as f:
                 datetime_string = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 header = '\n[%s][%02d] ' % (datetime_string, level)
@@ -172,6 +173,10 @@ class Job:
     def run_init_pass(self):
         self.log("Launching initial pass", 0)
         init_pass.run_init_pass(self)
+    def copy_init_pass(self,summary_old_job):
+        n.save(os.path.join(self.dirs['summary'],
+               'summary.npy'), summary_old_job)
+    
     def get_registered_files(self, key='registered_data', filename_filter='reg_data'):
         all_files = n.os.listdir(self.dirs[key])
         reg_files = [os.path.join(self.dirs[key],x) for x in all_files if x.startswith(filename_filter)]
