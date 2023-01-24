@@ -117,7 +117,7 @@ def register_mov(mov3d, refs_and_masks, all_ops, log_cb = default_log, convolve_
      
 
 def fuse_and_save_reg_file(reg_file, reg_fused_dir, centers, shift_xs, nshift, nbuf, crops=None, mov=None, save=True):
-    file_name = reg_file.split('\\')[-1]
+    file_name = reg_file.split(os.sep)[-1]
     fused_file_name = os.path.join(reg_fused_dir, 'fused_' + file_name)
     if mov is None: 
         mov = n.load(reg_file)
