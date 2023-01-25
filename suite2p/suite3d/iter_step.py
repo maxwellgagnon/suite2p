@@ -49,10 +49,11 @@ def calculate_corrmap(mov, params, dirs, log_cb = default_log, save=True, return
     npil_hpf_z = params['npil_hpf_z']
     unif_filter_xy = params['unif_filter_xy']
     unif_filter_z = params['unif_filter_z']
-    intensity_thresh = 0
+    intensity_thresh = params.get('intensity_thresh', 0)
     dtype = params['dtype']
     n_proc_corr = params['n_proc_corr']
     mproc_batchsize = params['mproc_batchsize'] 
+    fix_vmap_edges = params['fix_vmap_edges']
     npil_filt_size = (npil_hpf_z, npil_hpf_xy, npil_hpf_xy)
     unif_filt_size = (unif_filter_z, unif_filter_xy, unif_filter_xy)
 
@@ -69,6 +70,7 @@ def calculate_corrmap(mov, params, dirs, log_cb = default_log, save=True, return
     max_img = n.zeros((nz,ny,nx))
     sdmov2 = n.zeros((nz,ny,nx))
     n_frames_proc = 0 
+    print(intensity_thresh)
     for batch_idx in range(n_batches):
         log_cb("Running batch %d" % (batch_idx + 1), 2)
         st_idx = batch_idx * t_batch_size
@@ -84,13 +86,17 @@ def calculate_corrmap(mov, params, dirs, log_cb = default_log, save=True, return
         if save:
             log_cb("Saving to %s" % batch_dirs[batch_idx],2)
             n.save(os.path.join(batch_dirs[batch_idx], 'vmap2.npy'), vmap2)
-            n.save(os.path.join(batch_dirs[batch_idx], 'vmap.npy'), vmap2**0.5)
             n.save(os.path.join(batch_dirs[batch_idx], 'mean_img.npy'), mean_img)
             n.save(os.path.join(batch_dirs[batch_idx], 'max_img.npy'), max_img)
         gc.collect()
+    vmap = vmap2 ** 0.5
+    if fix_vmap_edges:
+        vmap[0] = vmap[0] * vmap[1].mean() / vmap[0].mean()
+        vmap[-1] = vmap[-1] * vmap[-2].mean() / vmap[-1].mean()
+    if save: n.save(os.path.join(batch_dirs[batch_idx], 'vmap.npy'), vmap)
     if return_mov_filt:
-        return mov_filt, vmap2 ** 0.5
-    return vmap2 ** 0.5
+        return mov_filt, vmap
+    return vmap
 
 
     

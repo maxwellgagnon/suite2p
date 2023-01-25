@@ -6,29 +6,33 @@ import numpy as n
 def default_log(string, *args, **kwargs): 
     print(string)
 
-def detect_cells(patch, vmap, max_iter = 10000, threshold_scaling = 0.5, extend_thresh=0.2, 
+def detect_cells(patch, vmap, max_iter = 10000, peak_thresh = 2.5, activity_thresh = 2.5, extend_thresh=0.2, 
                     roi_ext_iterations=2, max_ext_iters=20, percentile=0, log=default_log, 
                     magic_number=1200, recompute_v = False, offset=(0,0,0), savepath=None, debug=False,**kwargs):
     nt, nz, ny, nx = patch.shape
     stats = []
 
-    Th2 = threshold_scaling * 5
+    Th2 = activity_thresh
     vmultiplier = max(1, nt / magic_number)
-    peak_thresh = vmultiplier * Th2
+    peak_thresh = vmultiplier * peak_thresh
     vmin = vmap.min()
     log("Starting extraction with peak_thresh: %0.3f and Th2: %0.3f" % (peak_thresh, Th2), 1)
 
     for iter_idx in range(max_iter):
-        med, zz, yy, xx, lam, peak_val = find_top_roi3d(vmap)
+        med, zz, yy, xx, lam, peak_val = find_top_roi3d(vmap, xy_pix_scale = 3)
         if peak_val < peak_thresh:
             log("Iter %04d: peak is too small (%0.3f) - ending extraction" % (iter_idx, peak_val), 2)
             break
         
         tproj = patch[:,zz,yy,xx] @ lam
         threshold = min(Th2, n.percentile(tproj, percentile)) if percentile > 0 else Th2
+        log("Cell %d at with peak %.3f, activity_thresh %.3f, max %0.3f" % (iter_idx, peak_val, threshold, tproj.max()), 2)
         active_frames = n.nonzero(tproj > threshold)[0]
 
         for i in range(roi_ext_iterations):
+            log("%d/%d active frames" % (len(active_frames),nt), 3)
+            if len(active_frames) == 0:
+                log(1,"WARNING: no active frames in roi %d" % iter_idx)
             zz,yy,xx,lam = iter_extend3d(zz,yy,xx,active_frames, patch, extend_thresh=extend_thresh,
                                             max_ext_iters=max_ext_iters, verbose=debug)
             tproj = patch[:,zz,yy,xx] @ lam
@@ -46,6 +50,7 @@ def detect_cells(patch, vmap, max_iter = 10000, threshold_scaling = 0.5, extend_
             vmap[zz,yy,xx] = vmin
         
         stat = {
+            'idx' : iter_idx,
             'coords_patch' : (zz,yy,xx),
             'coords' : (zz+offset[0],yy+offset[1],xx+offset[2]),
             'lam' : lam,
@@ -114,8 +119,6 @@ def iter_extend3d(zz,yy,xx, active_frames, mov, verbose=False, extend_thresh=0.2
     iter_idx = 0
     mov_act = mov[active_frames].mean(axis=0)
     # lam = n.array([lam0])
-
-    # TODO HERE IS A BUG that causes many cells with break - no pix condition
     while npix < 10000 and iter_idx < max_ext_iters:
         npix = len(yy)
         zz, yy, xx = extend_roi3d(zz,yy,xx, mov.shape[1:], extend_z=extend_z)
