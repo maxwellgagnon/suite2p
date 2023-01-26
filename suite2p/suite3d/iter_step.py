@@ -70,7 +70,6 @@ def calculate_corrmap(mov, params, dirs, log_cb = default_log, save=True, return
     max_img = n.zeros((nz,ny,nx))
     sdmov2 = n.zeros((nz,ny,nx))
     n_frames_proc = 0 
-    print(intensity_thresh)
     for batch_idx in range(n_batches):
         log_cb("Running batch %d" % (batch_idx + 1), 2)
         st_idx = batch_idx * t_batch_size

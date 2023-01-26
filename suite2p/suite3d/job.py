@@ -11,6 +11,7 @@ from suite2p.io import lbm as lbmio
 from multiprocessing import Pool
 from suite2p.suite3d.iter_step import register_dataset, fuse_and_save_reg_file, calculate_corrmap
 from suite2p.suite3d import extension as ext
+from suite2p.extraction import dcnv
 
 class Job:
     def __init__(self, root_dir, job_id, params=None, tifs=None, exist_ok=False, verbosity=10, create=True):
@@ -73,7 +74,7 @@ class Job:
         if new_params is not None:
             self.params.update(new_params)
         n.save(params_path, self.params)
-        self.log("Updated params file: %s" % params_path, 2)
+        self.log("Updated params file: %s" % params_path)
 
     def load_params(self):
         params_path = os.path.join(self.dirs['job_dir'], 'params.npy')
@@ -166,17 +167,20 @@ class Job:
                'summary.npy'), summary_old_job)
     
     def register(self, tifs=None, start_batch_idx = 0):
+        self.save_params()
         if tifs is None:
             tifs = self.tifs
         register_dataset(tifs, self.params, self.dirs, self.load_summary(), self.log, start_batch_idx = start_batch_idx)
 
     def calculate_corr_map(self, mov=None, save=True, return_mov_filt=False):
+        self.save_params()
         self.make_new_dir('mov_sub')
         if mov is None:
             mov = self.get_registered_movie('registered_fused_data', 'fused')
         return calculate_corrmap(mov, self.params, self.dirs, self.log, return_mov_filt=return_mov_filt, save=save)
 
-    def extract_cells_from_patch(self, patch_idx = 0, zs=None, ys=None, xs=None, vmap=None, mov=None):
+    def detect_cells_from_patch(self, patch_idx = 0, zs=None, ys=None, xs=None, vmap=None, mov=None, compute_npil_masks=True):
+        self.save_params()
         detection_dir = self.make_new_dir('detection')
         patch_str = 'patch-%04d' % patch_idx
         patch_dir = self.make_new_dir(patch_str, parent_dir_name= 'detection')
@@ -184,21 +188,65 @@ class Job:
         info_path = os.path.join(patch_dir, 'info.npy')
 
         patch_info = {'zs' : zs, 'ys' : ys, 'xs' : xs, 'all_params' : self.params}
-        n.save(info_path, patch_info)
-        self.log("Saving cell stats and info to %s" % patch_dir)
 
         if vmap is None:
             vmap = self.load_iter_results(-1)['vmap'][zs[0]:zs[1], ys[0]:ys[1], xs[0]:xs[1]]
         if mov is None:
-            mov = self.get_registered_movie('mov_sub', '')[:, zs[0]:zs[1], ys[0]:ys[1], xs[0]:xs[1]]
+            mov = self.get_registered_movie('mov_sub', '',axis=0)
+            __, nz,ny,nx = mov.shape
+            mov = mov[:, zs[0]:zs[1], ys[0]:ys[1], xs[0]:xs[1]]
         if self.params['detection_timebin'] > 1:
             mov = ext.binned_mean(mov, self.params['detection_timebin'])
         mov = mov.compute()
-
+        patch_info['vmap'] = vmap
+        n.save(info_path, patch_info)
+        self.log("Saving cell stats and info to %s" % patch_dir)
         stats = ext.detect_cells(mov, vmap, **self.params, log=self.log, 
                              offset = (zs[0], ys[0], xs[0]), savepath=stats_path)
-        
+
+        self.log("Computing neuropil masks")
+        stats = ext.compute_npil_masks(stats, (nz,ny,nx))
+        n.save(stats_path, stats)
         return stats
+
+    def extract_and_deconvolve(self, patch_idx=0, mov=None):
+        self.save_params()
+        if mov is None:
+            mov = self.get_registered_movie('registered_fused_data','')
+        stats, info = self.get_detected_cells(patch_idx)
+        patch_dir = self.get_patch_dir(patch_idx)
+
+        self.log("Extracting activity")
+        F_roi, F_neu = ext.extract_activity(mov, stats)
+
+        self.log("Deconvolving")
+        F_sub = F_roi - F_neu * self.params['npil_coeff']
+        F_sub = dcnv.preprocess(F_sub, self.params['dcnv_baseline'], self.params['dcnv_win_baseline'],
+                     self.params['dcnv_sig_baseline'], self.params['fs'], self.params['dcnv_prctile_baseline'])
+        spks = dcnv.oasis(F_sub, batch_size = self.params['dcnv_batchsize'], tau=self.params['tau'],
+                         fs=self.params['fs'])
+                         
+        self.log("Saving to %s" % patch_dir)
+        n.save(os.path.join(patch_dir, 'F.npy'), F_roi)
+        n.save(os.path.join(patch_dir, 'Fneu.npy'), F_neu)
+        n.save(os.path.join(patch_dir, 'spks.npy'), spks)
+        
+        return self.get_traces()
+
+    def get_patch_dir(self, patch_idx = 0):
+        return self.dirs['patch-%04d' % patch_idx]
+    def get_detected_cells(self, patch_idx = 0):
+        patch_dir = self.get_patch_dir(patch_idx)
+        stats = n.load(os.path.join(patch_dir, 'stats.npy'), allow_pickle=True)
+        info = n.load(os.path.join(patch_dir, 'info.npy'), allow_pickle=True).item()
+        return stats, info
+    def get_traces(self, patch_idx=0):
+        patch_dir = self.get_patch_dir(patch_idx)
+        traces = {}
+        for filename in ['F.npy', 'Fneu.npy', 'spks.npy']:
+            if filename in os.listdir(patch_dir):
+                traces[filename[:-4]] = n.load(os.path.join(patch_dir, filename))
+        return traces
         
 
     def get_registered_files(self, key='registered_data', filename_filter='reg_data'):
@@ -256,9 +304,9 @@ class Job:
         mov_sub = u3d.npy_to_dask(mov_sub_paths, axis=0)
         return mov_sub
 
-    def get_registered_movie(self, key='registered_data', filename_filter='reg_data'):
+    def get_registered_movie(self, key='registered_data', filename_filter='reg_data', axis=1):
             paths = self.get_registered_files(key, filename_filter)
-            mov_reg = u3d.npy_to_dask(paths, axis=1)
+            mov_reg = u3d.npy_to_dask(paths, axis=axis)
             return mov_reg
 
     def load_frame_counts(self):

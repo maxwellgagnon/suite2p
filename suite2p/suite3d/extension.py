@@ -8,12 +8,12 @@ def default_log(string, *args, **kwargs):
 
 def detect_cells(patch, vmap, max_iter = 10000, peak_thresh = 2.5, activity_thresh = 2.5, extend_thresh=0.2, 
                     roi_ext_iterations=2, max_ext_iters=20, percentile=0, log=default_log, 
-                    magic_number=1200, recompute_v = False, offset=(0,0,0), savepath=None, debug=False,**kwargs):
+                    recompute_v = False, offset=(0,0,0), savepath=None, debug=False,**kwargs):
     nt, nz, ny, nx = patch.shape
     stats = []
 
     Th2 = activity_thresh
-    vmultiplier = max(1, nt / magic_number)
+    vmultiplier = 1 #max(1, nt / magic_number)
     peak_thresh = vmultiplier * peak_thresh
     vmin = vmap.min()
     log("Starting extraction with peak_thresh: %0.3f and Th2: %0.3f" % (peak_thresh, Th2), 1)
@@ -62,7 +62,7 @@ def detect_cells(patch, vmap, max_iter = 10000, peak_thresh = 2.5, activity_thre
         if savepath is not None and iter_idx % 250 == 0 and iter_idx > 0:
             n.save(savepath,stats)
             log("Saving checkpoint to %s" % savepath)
-    log("Found %d cells in %d iterations" % (len(stats), max_iter))
+    log("Found %d cells in %d iterations" % (len(stats), iter_idx+1))
     if savepath is not None:
         log("Saving cells to %s" % savepath)
         n.save(savepath, stats)
@@ -137,6 +137,12 @@ def iter_extend3d(zz,yy,xx, active_frames, mov, verbose=False, extend_thresh=0.2
     return zz,yy,xx,lam
 
 
+def extend_roi3d_iter(zz, yy, xx, shape, n_iters=3):
+    for i in range(n_iters):
+        zz, yy, xx = extend_roi3d(zz, yy, xx, shape)
+    return zz, yy, xx
+
+
 def extend_roi3d(zz, yy, xx, shape, extend_z=True):
     n_pix = len(zz)
     coords = [[zz[i], yy[i], xx[i]] for i in range(n_pix)]
@@ -158,3 +164,106 @@ def extend_roi3d(zz, yy, xx, shape, extend_z=True):
     zz, yy, xx = n.unique(coords, axis=0).T
 
     return zz, yy, xx
+
+
+def extend_helper(vv_roi, vv_ring, extend_v, nv, v_max_extension=None):
+    if v_max_extension is None:
+        v_max_extension = n.inf
+    v_min, v_max = vv_ring.min(), vv_ring.max()
+    v_absmin = max(0,  vv_roi.min() - v_max_extension,
+                   vv_ring.min() - extend_v)
+    v_absmax = min(nv, vv_roi.max() + v_max_extension +
+                   1, vv_ring.max() + 1 + extend_v)
+
+    # print(v_absmin)
+    return n.arange(v_absmin, v_absmax)
+
+
+def create_cell_pix(stats, shape, lam_percentile=70.0, percentile_filter_shape=(3, 25, 25)):
+    nz, ny, nx = shape
+    lam_map = n.zeros((nz, ny, nx))
+    roi_map = n.zeros((nz, ny, nx))
+
+    for i, stat in enumerate(stats):
+        zc, yc, xc = stat['coords']
+        lam = stat['lam']
+        lam_map[zc, yc, xc] = n.maximum(lam_map[zc, yc, xc], lam)
+
+    if lam_percentile > 0.0:
+        filt = percentile_filter(lam_map, percentile=70.0, size=(3, 25, 25))
+        cell_pix = ~n.logical_or(lam_map < filt, lam_map == 0)
+    else:
+        cell_pix = lam_map > 0.0
+    return cell_pix
+
+def get_neuropil_mask(stat, cell_pix, min_neuropil_pixels=1000, extend_by=(1, 3, 3), z_max_extension=5,
+                      max_np_ext_iters=5, return_coords_only=False, np_ring_iterations=2):
+    zz_roi, yy_roi, xx_roi = stat['coords']
+    zz_ring, yy_ring, xx_ring = extend_roi3d_iter(
+        zz_roi, yy_roi, xx_roi, cell_pix.shape, np_ring_iterations)
+
+    nz, ny, nx = cell_pix.shape
+
+    n_ring = (~cell_pix[zz_ring, yy_ring, xx_ring]).sum()
+
+    zz_np, yy_np, xx_np = zz_ring.copy(), yy_ring.copy(), xx_ring.copy()
+
+    n_np_pix = 0
+    iter_idx = 0
+    while n_np_pix < min_neuropil_pixels and iter_idx < max_np_ext_iters:
+        zs_np = extend_helper(zz_roi, zz_np, extend_by[0], nz, z_max_extension)
+        ys_np = extend_helper(yy_roi, yy_np, extend_by[1], ny)
+        xs_np = extend_helper(xx_roi, xx_np, extend_by[2], nx)
+
+        zz_np, yy_np, xx_np = n.meshgrid(zs_np, ys_np, xs_np, indexing='ij')
+        np_pixs = (~cell_pix[zz_np, yy_np, xx_np])
+        n_np_pix = (np_pixs).sum() - n_ring
+        # print(n_np_pix)
+        # print(zs_np)
+        # print(xs_np)
+
+        iter_idx += 1
+
+    if return_coords_only:
+        return zz_np, yy_np, xx_np, zz_ring, yy_ring, xx_ring
+
+    else:
+        neuropil_mask = n.zeros((nz, ny, nx))
+        neuropil_mask[zz_np[np_pixs], yy_np[np_pixs], xx_np[np_pixs]] = True
+        neuropil_mask[zz_ring, yy_ring, xx_ring] = False
+        pix = n.nonzero(neuropil_mask)
+
+        return pix
+
+
+def compute_npil_masks(stats, shape, offset = (0,0,0), np_params={}):
+    # TODO: parallelize this (EASY)
+    cell_pix = create_cell_pix(stats, shape)
+    for stat in stats:
+        zc, yc, xc = stat['coords']
+        npz, npy, npx = get_neuropil_mask(stat, cell_pix, **np_params)
+        stat['npcoords'] = (npz, npy, npx)
+        stat['npcoords_patch'] = (npz-offset[0], npy-offset[1], npx-offset[2])
+    return stats
+
+def extract_activity(mov, stats, batchsize_frames=5000):
+    # if you run out of memory, reduce batchsize_frames
+    nz,nt,ny,nx = mov.shape
+    ns = len(stats)
+    F_roi = n.zeros((ns, nt))
+    F_neu = n.zeros((ns, nt))
+
+    n_batches = int(n.ceil(nt / batchsize_frames))
+    for batch_idx in range(n_batches):
+        start = batch_idx * batchsize_frames
+        end = min(nt, start + batchsize_frames)
+        mov_batch = mov[:,start:end].compute()
+        for i in range(ns):
+            stat = stats[i]
+            zc, yc, xc = stat['coords']
+            npzc, npyc, npxc = stat['npcoords']
+            lam = stat['lam'] / stat['lam'].sum()
+            F_roi[i,start:end] = lam @ mov_batch[zc,:,yc,xc]
+            F_neu[i,start:end] = mov_batch[npzc,:,npyc,npxc].mean(axis=0)
+
+    return F_roi, F_neu

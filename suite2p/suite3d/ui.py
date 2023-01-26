@@ -6,15 +6,18 @@ import napari
 from argparse import Namespace
 
 
-def load_outputs(dir, files = ['stats.npy', 'F.npy', 'Fneu.npy', 'spks.npy', 'vmap.npy', 'im3d.npy'], return_namespace=True):
-    outs = {}
+def load_outputs(dir, files = ['stats.npy', 'F.npy', 'Fneu.npy', 'spks.npy', 'info.npy'], return_namespace=False):
+    outputs = {}
     for filename in files:
-        key = filename.split('.')[0]
-        outs[key] = n.load(os.path.join(dir, filename), allow_pickle=True)
-
-    if return_namespace:
-        outs = Namespace(**outs)
-    return outs
+        if filename in os.listdir(dir):
+            tag = filename.split('.')[0]
+            outputs[tag] = n.load(os.path.join(dir, filename),allow_pickle=True)
+            if tag == 'info':
+                outputs[tag] = outputs[tag].item()
+                outputs['vmap'] = outputs['info']['vmap']
+                outputs['fs'] = outputs['info']['all_params']['fs']
+    outputs['ts'] = n.arange(outputs['F'].shape[-1]) / outputs['fs']
+    return outputs
 
 def normalize_planes(im3d, axes = (1,2), normalize_by='mean'):
     imnorm = im3d - im3d.min(axis=axes, keepdims=True)
@@ -24,7 +27,7 @@ def normalize_planes(im3d, axes = (1,2), normalize_by='mean'):
         assert False
     return imnorm
 
-def make_cell_label_vol(stats, plot_cell_idxs, shape, lam_thresh = 0.5):
+def make_cell_label_vol(stats, plot_cell_idxs, shape, lam_thresh = 0.5, use_patch_coords = True):
     cell_labels = n.zeros(shape, dtype=int)
     n_cells = len(plot_cell_idxs)
     napari_cell_label = n.arange(1,n_cells+1, dtype=int)
@@ -37,7 +40,7 @@ def make_cell_label_vol(stats, plot_cell_idxs, shape, lam_thresh = 0.5):
         lam = stat['lam'] / lam.sum()
         npix = len(lam)
         valid_pix = lam > lam_thresh / npix
-        zs, ys, xs = [xx[valid_pix] for xx in stat['coords']]
+        zs, ys, xs = [xx[valid_pix] for xx in stat['coords_patch']]
 
         cell_label = napari_cell_label[i]
         cell_labels[zs, ys, xs] = cell_label
