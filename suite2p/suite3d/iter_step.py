@@ -42,26 +42,36 @@ def init_batches(tifs, batch_size, max_tifs_to_analyze=None):
 
 def calculate_corrmap(mov, params, dirs, log_cb = default_log, save=True, return_mov_filt=False):
     # TODO This can be accelerated 
+    # np sub and convolution takes about ~1/2 of the time, that is parallelized
+    # reminaing 1/2 of runtime is single-core, so overall improvement capped around 2x speed 
+    # might be worth it
 
     t_batch_size = params['t_batch_size']
     temporal_hpf = params['temporal_hpf']
-    npil_hpf_xy = params['npil_hpf_xy']
-    npil_hpf_z = params['npil_hpf_z']
-    unif_filter_xy = params['unif_filter_xy']
-    unif_filter_z = params['unif_filter_z']
+    npil_filt_xy = params['npil_filt_xy']
+    npil_filt_z = params['npil_filt_z']
+    conv_filt_xy = params['conv_filt_xy']
+    conv_filt_z = params['conv_filt_z']
     intensity_thresh = params.get('intensity_thresh', 0)
     dtype = params['dtype']
     n_proc_corr = params['n_proc_corr']
     mproc_batchsize = params['mproc_batchsize'] 
-    fix_vmap_edges = params['fix_vmap_edges']
-    npil_filt_size = (npil_hpf_z, npil_hpf_xy, npil_hpf_xy)
-    unif_filt_size = (unif_filter_z, unif_filter_xy, unif_filter_xy)
+    npil_filt_size = (npil_filt_z, npil_filt_xy, npil_filt_xy)
+    unif_filt_size = (conv_filt_z, conv_filt_xy, conv_filt_xy)
+    do_sdnorm = params.get('do_sdnorm','True')
+    fix_vmap_edges = params.get('fix_vmap_edges','True')
+
+    conv_filt_type = params.get('conv_filt_type', 'unif')
+    npil_filt_type = params.get('npil_filt_type', 'unif')
+    log_cb("Using conv_filt: %s, %.2f, %.2f" % (conv_filt_type, conv_filt_z, conv_filt_xy), 1)
+    log_cb("Using np_filt: %s, %.2f, %.2f" % (npil_filt_type, npil_filt_z, npil_filt_xy), 1)
 
     nz, nt, ny, nx = mov.shape
     n_batches = int(n.ceil(nt / t_batch_size))
     if save:
         batch_dirs, __ = init_batch_files(dirs['iters'], makedirs=True, n_batches=n_batches)
         __, mov_sub_paths = init_batch_files(None, dirs['mov_sub'], makedirs=False, n_batches=n_batches, filename='mov_sub')
+        # print(mov_sub_paths)
         log_cb("Created files and dirs for %d batches" % n_batches, 1)
     else: mov_sub_paths = [None] * n_batches
 
@@ -71,7 +81,7 @@ def calculate_corrmap(mov, params, dirs, log_cb = default_log, save=True, return
     sdmov2 = n.zeros((nz,ny,nx))
     n_frames_proc = 0 
     for batch_idx in range(n_batches):
-        log_cb("Running batch %d" % (batch_idx + 1), 2)
+        log_cb("Running batch %d of %d" % (batch_idx + 1, n_batches), 2)
         st_idx = batch_idx * t_batch_size
         end_idx = min(nt, st_idx + t_batch_size)
         n_frames_proc += end_idx - st_idx
@@ -80,8 +90,9 @@ def calculate_corrmap(mov, params, dirs, log_cb = default_log, save=True, return
         log_cb("Loaded and swapped from dask, idx %d to %d" % (st_idx, end_idx), 2)
         log_cb("Calculating corr map",2)
         mov_filt = calculate_corrmap_for_batch(movx, sdmov2, vmap2, mean_img, max_img, temporal_hpf, npil_filt_size, unif_filt_size, intensity_thresh,
-                                    n_frames_proc, n_proc_corr, mproc_batchsize, mov_sub_save_path=mov_sub_paths[batch_idx],
-                                    log_cb=log_cb, return_mov_filt=return_mov_filt)
+                                    n_frames_proc, n_proc_corr, mproc_batchsize, mov_sub_save_path=mov_sub_paths[batch_idx],do_sdnorm=do_sdnorm,
+                                    log_cb=log_cb, return_mov_filt=return_mov_filt, fix_vmap_edges=fix_vmap_edges,
+                                               conv_filt_type=conv_filt_type, np_filt_type=npil_filt_type, dtype=dtype)
         if save:
             log_cb("Saving to %s" % batch_dirs[batch_idx],2)
             n.save(os.path.join(batch_dirs[batch_idx], 'vmap2.npy'), vmap2)
@@ -89,7 +100,7 @@ def calculate_corrmap(mov, params, dirs, log_cb = default_log, save=True, return
             n.save(os.path.join(batch_dirs[batch_idx], 'max_img.npy'), max_img)
         gc.collect()
     vmap = vmap2 ** 0.5
-    if fix_vmap_edges:
+    if fix_vmap_edges and nz > 1:
         vmap[0] = vmap[0] * vmap[1].mean() / vmap[0].mean()
         vmap[-1] = vmap[-1] * vmap[-2].mean() / vmap[-1].mean()
     if save: n.save(os.path.join(batch_dirs[batch_idx], 'vmap.npy'), vmap)
@@ -99,17 +110,30 @@ def calculate_corrmap(mov, params, dirs, log_cb = default_log, save=True, return
 
 
     
-def calculate_corrmap_for_batch(mov, sdmov2, vmap2, mean_img, max_img, temporal_hpf, npil_filt_size, unif_filt_size, intensity_thresh, n_frames_proc=0,n_proc=12, mproc_batchsize = 50, mov_sub_save_path=None, log_cb=default_log, return_mov_filt=False ):
-                                
+def calculate_corrmap_for_batch(mov, sdmov2, vmap2, mean_img, max_img, temporal_hpf, npil_filt_size, unif_filt_size, intensity_thresh, n_frames_proc=0,n_proc=12, mproc_batchsize = 50, mov_sub_save_path=None, log_cb=default_log, return_mov_filt=False, do_sdnorm=True, np_filt_type='unif', conv_filt_type = 'unif' , fix_vmap_edges=True, dtype=None):
+    if dtype is None: dtype = n.float32
     nt, nz, ny, nx = mov.shape
     log_cb("Rolling mean filter", 3)
     mean_img[:] = mean_img * (n_frames_proc - nt) / n_frames_proc + mov.mean(axis=0) * nt / n_frames_proc
     max_img[:] = n.maximum(max_img, mov.max(axis=0))
+
+    # shmem_mov_sub, shmem_par_mov_sub, mov_sub = utils.create_shmem_from_arr(mov, copy=True)
+    # del mov
     mov = det_utils.hp_rolling_mean_filter(mov, temporal_hpf, copy=False)
+    # det3d.hp_rolling_mean_filter_mp(
+        # shmem_par_mov_sub, temporal_hpf, nz=nz, n_proc=n_proc)
+    # print(mov_sub.std())
+    # return
     log_cb("Stdev over time",3)
-    sdmov2 += det3d.standard_deviation_over_time(mov, batch_size=nt, sqrt=False)
-    sdmov = n.sqrt(n.maximum(1e-10, sdmov2 / n_frames_proc))
+    if do_sdnorm:
+        sdmov2 += det3d.standard_deviation_over_time(mov, batch_size=nt, sqrt=False)
+        sdmov = n.sqrt(n.maximum(1e-10, sdmov2 / n_frames_proc))
+    else:
+        log_cb("Skipping sdnorm", 3)
+        sdmov = 1
     mov[:] = mov[:] / sdmov
+    if return_mov_filt:
+        sdnorm_mov = mov.copy()
     log_cb("Sharr creation",3)
     shmem_mov_sub, shmem_par_mov_sub, mov_sub = utils.create_shmem_from_arr(mov, copy=True)
     del mov
@@ -117,17 +141,20 @@ def calculate_corrmap_for_batch(mov, sdmov2, vmap2, mean_img, max_img, temporal_
         mov_sub, copy=False)
     log_cb("Sub and conv", 3)
     det3d.np_sub_and_conv3d_split_shmem(
-        shmem_par_mov_sub, shmem_par_mov_filt, npil_filt_size, unif_filt_size, n_proc=n_proc, batch_size=mproc_batchsize)
+        shmem_par_mov_sub, shmem_par_mov_filt, npil_filt_size, unif_filt_size, n_proc=n_proc, batch_size=mproc_batchsize,
+        np_filt_type=np_filt_type, conv_filt_type = conv_filt_type)
     if mov_sub_save_path is not None:
-        n.save(mov_sub_save_path, mov_sub)
+        n.save(mov_sub_save_path, mov_sub.astype(dtype))
     log_cb("Vmap", 3)
-    vmap2 += det3d.get_vmap3d(mov_filt, intensity_thresh, sqrt=False, mean_subtract=False)
+    vmap2 += det3d.get_vmap3d(mov_filt, intensity_thresh,
+                              sqrt=False, mean_subtract=False, fix_edges=fix_vmap_edges)
     if return_mov_filt:
         retfilt = mov_filt.copy()
+        retsub = mov_sub.copy()
     shmem_mov_sub.close(); shmem_mov_sub.unlink()
     shmem_mov_filt.close(); shmem_mov_filt.unlink()
     if return_mov_filt:
-        return retfilt
+        return (sdnorm_mov, retfilt, retsub)
     else:
         return None
 
@@ -210,7 +237,7 @@ def register_mov(mov3d, refs_and_masks, all_ops, log_cb = default_log, convolve_
     return all_offsets
      
 
-def fuse_and_save_reg_file(reg_file, reg_fused_dir, centers, shift_xs, nshift, nbuf, crops=None, mov=None, save=True):
+def fuse_and_save_reg_file(reg_file, reg_fused_dir, centers, shift_xs, nshift, nbuf, crops=None, mov=None, save=True, delete_original=False):
     file_name = reg_file.split(os.sep)[-1]
     fused_file_name = os.path.join(reg_fused_dir, 'fused_' + file_name)
     if mov is None: 
@@ -241,6 +268,9 @@ def fuse_and_save_reg_file(reg_file, reg_fused_dir, centers, shift_xs, nshift, n
         mov_fused[zidx, :, :, curr_x_new:] = mov[zidx, :, :, curr_x:]
     if crops is not None:
         mov_fused = mov_fused[crops[0][0]:crops[0][1], :, crops[1][0]:crops[1][1], crops[2][0]:crops[2][1]]
+    if delete_original:
+        print("Delelting file: %s" % reg_file)
+        os.remove(reg_file)
     if save: 
         n.save(fused_file_name, mov_fused)
         return fused_file_name

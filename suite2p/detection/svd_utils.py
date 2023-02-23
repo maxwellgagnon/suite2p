@@ -318,8 +318,11 @@ def make_blocks(img_shape, block_shape, overlaps=(0, 36, 36)):
 
 def block_and_svd(mov_reg, n_comp, block_shape = (1,128,128), block_overlaps=(0, 18, 18), 
                   t_chunk = 4000, pix_chunk = 12000, n_svd_blocks_per_batch = 36, svd_dir=None, 
-                  block_validity = None, log_cb=default_log):
-    nz, nt, ny, nx = mov_reg.shape
+                  block_validity = None, log_cb=default_log, flip_shape=False):
+    if not flip_shape: 
+        nz, nt, ny, nx = mov_reg.shape
+    elif flip_shape:
+        nt, nz, ny, nx = mov_reg.shape
     blocks, grid_shape = make_blocks((nz,ny,nx), block_shape, block_overlaps)
 
     n_blocks = blocks.shape[1]
@@ -355,7 +358,11 @@ def block_and_svd(mov_reg, n_comp, block_shape = (1,128,128), block_overlaps=(0,
             if block_validity is not None:
                 if not block_validity[block_idx]: continue
             slices = [slice(x[0],x[1],1) for x in blocks[:,block_idx]]
-            block = mov_reg[slices[0], :,slices[1], slices[2]].swapaxes(0,1).reshape(nt,-1)
+            if not flip_shape:
+                block = mov_reg[slices[0], :,slices[1], slices[2]].swapaxes(0,1).reshape(nt,-1)
+            else:
+                block = mov_reg[:,slices[0],slices[1], slices[2]].reshape(nt,-1)
+
             zarr_dir = os.path.join(svd_block_dir, '%04d' % block_idx)
             os.makedirs(zarr_dir, exist_ok=True)
             temp = run_svd_on_block(block.rechunk((t_chunk, pix_chunk)), 
@@ -383,4 +390,4 @@ def block_and_svd(mov_reg, n_comp, block_shape = (1,128,128), block_overlaps=(0,
         log_cb("Estimated time remaining for %d batches: %s" % (n_batches - batch_idx, est_time_str) )
 
         batch_idx += 1
-    
+    return svd_info

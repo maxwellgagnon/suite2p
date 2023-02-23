@@ -111,7 +111,7 @@ def run_init_pass(job):
                                                     verbose=(job.verbosity == 2))
             job.log("Subtracting with estimated coefficient %0.3f" % cross_coeff)
         for plane in params['planes']:
-            if plane > 14:
+            if plane > 14 and plane - 15 in params['planes']:
                 plane_idx = n.where(n.array(params['planes']) == plane)[0][0]
                 sub_plane_idx = n.where(n.array(params['planes']) == plane - 15)[0][0]
                 

@@ -267,7 +267,10 @@ def threshold_reduce(mov: np.ndarray, intensity_threshold: float, fix_edges=Fals
         Vt += mov[t]**2 * (mov[t] > intensity_threshold)
     if sqrt: Vt = Vt**.5
     if fix_edges:
+        # print("FIXING EDGES")
         Vt[0] = Vt[1]; Vt[-1] = Vt[-2]
         Vt[:,0] = Vt[:,1]; Vt[:,-1] = Vt[:,-2]
+    # else:
+        # print("NOT FIXING EDGES")
     return Vt
 

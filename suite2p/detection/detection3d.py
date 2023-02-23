@@ -160,14 +160,15 @@ def get_vmap3d_shmem(shmem_in, shmem_vmap, intensity_threshold=None, fix_edges=T
         pool = multiprocessing.Pool(n_proc)
     pool.starmap(get_vmap3d_shmem_w, [(shmem_in, shmem_vmap, z_idx, intensity_threshold, fix_edges, sqrt) for z_idx in range(nz)])
 
-def np_sub_and_conv3d_shmem_w(in_par, idxs, np_filt_size,conv_filt_size, c1):
+def np_sub_and_conv3d_shmem_w(in_par, idxs, np_filt_size,conv_filt_size, c1, np_filt, conv_filt):
     shin, mov_in = utils3d.load_shmem(in_par)
     for idx in idxs:
         mov_in[idx] = mov_in[idx] - \
-            (uniform_filter(mov_in[idx], size=np_filt_size, mode='constant') / c1)
-        mov_in[idx] = uniform_filter(mov_in[idx], size=conv_filt_size, mode='constant')
+            (np_filt(mov_in[idx], size=np_filt_size, mode='constant') / c1)
+        mov_in[idx] = conv_filt(mov_in[idx], size=conv_filt_size, mode='constant')
 
-def np_sub_and_conv3d_shmem(shmem_in, np_filt_size, conv_filt_size, n_proc=8, batch_size=50, pool=None):
+def np_sub_and_conv3d_shmem(shmem_in, np_filt_size, conv_filt_size, n_proc=8, batch_size=50, pool=None,
+                            np_filt_type = 'unif', conv_filt_type = 'unif'):
     """
     WARNING: this is not optimal because the process startup time is quite long for each process
     seems like this is because each subprocess imports suite2p, which takes about 1-2 seconds
@@ -178,6 +179,12 @@ def np_sub_and_conv3d_shmem(shmem_in, np_filt_size, conv_filt_size, n_proc=8, ba
     in the future: either maintain the same processes for the whole thing, or figure out something else
     """
     nt, Lz, Ly, Lx = shmem_in['shape']
+    if np_filt_type == 'unif': np_filt = uniform_filter
+    elif np_filt_type == 'gaussian' : np_filt = gaussian_filter
+
+    if conv_filt_type == 'unif' : conv_filt = uniform_filter
+    elif conv_filt_type == 'gaussian' : conv_filt = gaussian_filter
+
     c1 = uniform_filter(n.ones((Lz, Ly, Lx)), np_filt_size, mode='constant')
 
     batches = [n.arange(idx, min(nt, idx+batch_size))
@@ -187,26 +194,32 @@ def np_sub_and_conv3d_shmem(shmem_in, np_filt_size, conv_filt_size, n_proc=8, ba
         pool = multiprocessing.Pool(n_proc)
         close=False
     pool.starmap(np_sub_and_conv3d_shmem_w, [
-                 (shmem_in, b, np_filt_size, conv_filt_size, c1) for b in batches])
+                 (shmem_in, b, np_filt_size, conv_filt_size, c1, np_filt, conv_filt) for b in batches])
     if close:
         pool.close()
         pool.terminate()
 
 
-
-def np_sub_and_conv3d_split_shmem_w(sub_par, filt_par, idxs, np_filt_size,conv_filt_size, c1, c2):
+def np_sub_and_conv3d_split_shmem_w(sub_par, filt_par, idxs, np_filt_size, conv_filt_size, c1, c2, np_filt, conv_filt):
     sub_sh, mov_sub = utils3d.load_shmem(sub_par)
     filt_sh,   mov_filt = utils3d.load_shmem(filt_par)
     for idx in idxs:
         mov_sub[idx] = mov_sub[idx] - \
-            (uniform_filter(mov_sub[idx], size=np_filt_size, mode='constant') / c1)
-        mov_filt[idx] = uniform_filter(mov_sub[idx], size=conv_filt_size, mode='constant') / c2
+            (np_filt(mov_sub[idx], np_filt_size, mode='constant') / c1)
+        mov_filt[idx] = conv_filt_size[-1] * conv_filt(mov_sub[idx], conv_filt_size, mode='constant') #/ c2
     sub_sh.close(); filt_sh.close()
 
-def np_sub_and_conv3d_split_shmem(shmem_sub, shmem_filt, np_filt_size, conv_filt_size, n_proc=8, batch_size=50, pool=None):
+def np_sub_and_conv3d_split_shmem(shmem_sub, shmem_filt, np_filt_size, conv_filt_size, n_proc=8, batch_size=50, pool=None, np_filt_type='unif', conv_filt_type='unif'):
     nt, Lz, Ly, Lx = shmem_sub['shape']
-    c1 = uniform_filter(n.ones((Lz, Ly, Lx)), np_filt_size, mode='constant')
-    c2 = uniform_filter(n.ones((Lz, Ly, Lx)), conv_filt_size, mode='constant')
+    if np_filt_type == 'unif': np_filt = uniform_filter
+    elif np_filt_type == 'gaussian' : np_filt = gaussian_filter
+
+    if conv_filt_type == 'unif' : conv_filt = uniform_filter
+    elif conv_filt_type == 'gaussian' : conv_filt = gaussian_filter
+
+
+    c1 = np_filt(n.ones((Lz, Ly, Lx)), np_filt_size, mode='constant')
+    c2 = conv_filt(n.ones((Lz, Ly, Lx)), conv_filt_size, mode='constant')
 
     batches = [n.arange(idx, min(nt, idx+batch_size))
                for idx in n.arange(0, nt, batch_size)]
@@ -215,7 +228,7 @@ def np_sub_and_conv3d_split_shmem(shmem_sub, shmem_filt, np_filt_size, conv_filt
         pool = multiprocessing.Pool(n_proc)
         close=False
     pool.starmap(np_sub_and_conv3d_split_shmem_w, [
-                 (shmem_sub, shmem_filt, b, np_filt_size, conv_filt_size, c1, c2) for b in batches])
+                 (shmem_sub, shmem_filt, b, np_filt_size, conv_filt_size, c1, c2, np_filt, conv_filt) for b in batches])
     if close:
         pool.close()
         pool.terminate()
@@ -268,6 +281,24 @@ def square_convolution_2d(mov: np.ndarray, filter_size: int, filter_size_z: int)
 
 
 
+def hp_rolling_mean_filter_mp(shmem_par, width, nz, n_proc = 16):
+    pool = multiprocessing.Pool(n_proc)
+    pool.starmap(hp_rolling_mean_filter_shmem_w, [(shmem_par, z_idx, width) for z_idx in range(nz)])
+    pool.close()
+    pool.terminate()
+
+import time
+def hp_rolling_mean_filter_shmem_w(shmem_par, z_idx, width) -> np.ndarray:
+    if z_idx == 0:
+        tic = time.time()
+    mov_sh, mov = utils3d.load_shmem(shmem_par)
+    if z_idx == 0: print(time.time() - tic)
+    for i in range(0, mov.shape[0], width):
+        mov[i:i + width, z_idx] -= mov[i:i + width, z_idx].mean(axis=0)
+
+    if z_idx == 0:
+        print(time.time() - tic)
+    mov_sh.close()
 
 # def np_sub_shmem_w(in_par, out_par, idxs, size, c1):
 #     shin, mov_in = utils3d.load_shmem(in_par)
