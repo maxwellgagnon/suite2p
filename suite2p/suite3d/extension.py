@@ -85,7 +85,7 @@ def detect_cells(patch, vmap, max_iter = 10000, peak_thresh = 2.5, activity_thre
     
 
 def detect_cells_mp(patch, vmap, n_proc = 8, max_iter = 10000, peak_thresh = 2.5, activity_thresh = 2.5, extend_thresh=0.2, 
-                    roi_ext_iterations=2, max_ext_iters=20, percentile=0, log=default_log, 
+                    roi_ext_iterations=2, max_ext_iters=20, percentile=0, log=default_log, max_pix = 250,
                     recompute_v = False, allow_overlap = True, offset=(0,0,0), savepath=None, debug=False,**kwargs):
     stats = []
     log("Loading movie patch to shared memory")
@@ -117,7 +117,7 @@ def detect_cells_mp(patch, vmap, n_proc = 8, max_iter = 10000, peak_thresh = 2.5
             roi_idxs = n.arange(len(good_outs)) + roi_idx + 1
 
             returns = p.starmap(detect_cells_worker, 
-                    [(widxs[i], roi_idxs[i], shmem_par_patch, good_outs[i], Th2, percentile, roi_ext_iterations, extend_thresh, max_ext_iters, offset) for i in range(len(good_outs))])
+                    [(widxs[i], roi_idxs[i], shmem_par_patch, good_outs[i], Th2, percentile, roi_ext_iterations, extend_thresh, max_ext_iters, offset, max_pix) for i in range(len(good_outs))])
             # print("RETUNRED")
             # print(vmap.shape)
             for i in range(len(returns)):
@@ -158,7 +158,7 @@ def detect_cells_mp(patch, vmap, n_proc = 8, max_iter = 10000, peak_thresh = 2.5
         n.save(is_cell_path, is_cell)
     return stats
     
-def detect_cells_worker(worker_idx, roi_idx, patch_par, out, Th2, percentile, roi_ext_iterations, extend_thresh, max_ext_iters, offset):
+def detect_cells_worker(worker_idx, roi_idx, patch_par, out, Th2, percentile, roi_ext_iterations, extend_thresh, max_ext_iters, offset, max_pix = 1000):
     patch_sh, patch = utils.load_shmem(patch_par)
     med, zz, yy, xx, lam, peak_val = out
     tproj = patch[:, zz, yy, xx] @ lam
@@ -172,7 +172,7 @@ def detect_cells_worker(worker_idx, roi_idx, patch_par, out, Th2, percentile, ro
         if len(active_frames) == 0:
             default_log(1,"WARNING: no active frames in roi %d" % roi_idx)
         zz,yy,xx,lam = iter_extend3d(zz,yy,xx,active_frames, patch, extend_thresh=extend_thresh,
-                                        max_ext_iters=max_ext_iters)
+                                        max_ext_iters=max_ext_iters, max_pix = max_pix)
         tproj = patch[:,zz,yy,xx] @ lam
         active_frames = n.nonzero(tproj > threshold)[0]
         npix = len(lam)
@@ -256,14 +256,14 @@ def add_square3d(zi, yi, xi, shape, xy_pix_scale=3, z_pix_scale=1):
     return zz, yy, xx, mask
 
 
-def iter_extend3d(zz,yy,xx, active_frames, mov, verbose=False, extend_thresh=0.2, max_ext_iters=10,extend_z=True):
+def iter_extend3d(zz,yy,xx, active_frames, mov, verbose=False, extend_thresh=0.2, max_ext_iters=10,extend_z=True, max_pix=10000):
     # pr = cProfile.Profile()
     # pr.enable()
     npix = 0
     iter_idx = 0
     mov_act = mov[active_frames].mean(axis=0)
     # lam = n.array([lam0])
-    while npix < 10000 and iter_idx < max_ext_iters:
+    while npix < max_pix and iter_idx < max_ext_iters:
         npix = len(yy)
         zz, yy, xx = extend_roi3d(zz,yy,xx, mov.shape[1:], extend_z=extend_z)
         lam = mov_act[zz, yy, xx]
@@ -456,7 +456,7 @@ def extract_activity_mp(mov, stats, batchsize_frames=500, log=default_log, offse
             lam = stat['lam'] / stat['lam'].sum()
             F_roi[i,start:end] = lam @ mov_batch[zc,:,yc,xc]
             F_neu[i,start:end] = mov_batch[npzc,:,npyc,npxc].mean(axis=0)
-        shmem_batch.close(); shmem_batch.unlink()
+        shmem_batch.close(); shmem_batch.unlink(); del mov_batch
 
     F_roi_out = F_roi.copy()
     F_neu_out = F_neu.copy()

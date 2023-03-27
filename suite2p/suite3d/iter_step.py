@@ -67,6 +67,11 @@ def calculate_corrmap(mov, params, dirs, log_cb = default_log, save=True, return
     log_cb("Using np_filt: %s, %.2f, %.2f" % (npil_filt_type, npil_filt_z, npil_filt_xy), 1)
 
     nz, nt, ny, nx = mov.shape
+    flip_shape = True
+    if nt < nz:
+        nt, nz, ny, nx = mov.shape
+        flip_shape = False
+        log_cb("Shape is unexpected (%s). Modifying such that nt: %d and nz: %d" % (str(mov.shape), nt, nz))
     n_batches = int(n.ceil(nt / t_batch_size))
     if save:
         batch_dirs, __ = init_batch_files(dirs['iters'], makedirs=True, n_batches=n_batches)
@@ -85,9 +90,17 @@ def calculate_corrmap(mov, params, dirs, log_cb = default_log, save=True, return
         st_idx = batch_idx * t_batch_size
         end_idx = min(nt, st_idx + t_batch_size)
         n_frames_proc += end_idx - st_idx
-        movx = mov[:,st_idx:end_idx]
-        movx = darr.swapaxes(movx, 0, 1).compute().astype(dtype)
-        log_cb("Loaded and swapped from dask, idx %d to %d" % (st_idx, end_idx), 2)
+        if flip_shape:
+            movx = mov[:,st_idx:end_idx]
+            movx = darr.swapaxes(movx, 0, 1).compute().astype(dtype)
+        else:
+            movx = mov[st_idx:end_idx]
+            try:
+                movx = movx.compute()
+            except:
+                log_cb("Not a dask array", 3)
+            movx = movx.astype(dtype)
+        log_cb("Loaded and swapped, idx %d to %d" % (st_idx, end_idx), 2)
         log_cb("Calculating corr map",2)
         mov_filt = calculate_corrmap_for_batch(movx, sdmov2, vmap2, mean_img, max_img, temporal_hpf, npil_filt_size, unif_filt_size, intensity_thresh,
                                     n_frames_proc, n_proc_corr, mproc_batchsize, mov_sub_save_path=mov_sub_paths[batch_idx],do_sdnorm=do_sdnorm,

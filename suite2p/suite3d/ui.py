@@ -5,9 +5,10 @@ from matplotlib import pyplot as plt
 import napari
 from argparse import Namespace
 import pyqtgraph as pg
+from napari._qt.widgets.qt_range_slider_popup import QRangeSliderPopup
 
-def load_outputs(dir, files = ['stats.npy', 'F.npy', 'Fneu.npy', 'spks.npy', 'info.npy', 'iscell.npy', 'vmap.npy', 'im3d.npy'], return_namespace=False, additional_outputs = {}, regen_iscell=False):
-    outputs = {}
+def load_outputs(dir, files = ['stats.npy', 'F.npy', 'Fneu.npy', 'spks.npy', 'info.npy', 'iscell_filtered.npy', 'iscell_extracted.npy', 'iscell.npy', 'vmap.npy', 'im3d.npy'], return_namespace=False, additional_outputs = {}, regen_iscell=False):
+    outputs = {'dir' : dir}
     for filename in files:
         if filename in os.listdir(dir):
             tag = filename.split('.')[0]
@@ -85,22 +86,26 @@ def simple_filter_cells(stats, max_w = 30):
             continue
         plot_cell_idxs.append(cell_idx)
     return n.array(plot_cell_idxs)
-
-
         
 def update_iscell(iscell, dir):
     iscell_path = os.path.join(dir, 'iscell.npy')
     n.save(iscell_path, iscell)
 
 def create_napari_ui(outputs, lam_thresh=0.3, title='3D Viewer', use_patch_coords=False, scale=(15,4,4), theme='dark', extra_cells=None, extra_cells_names=None,
-                     extra_images = None, extra_images_names = None, cell_label_name='cells', vmap_name='corr map'):
+                     extra_images = None, extra_images_names = None, cell_label_name='cells', vmap_name='corr map', use_filtered_iscell=True):
     if use_patch_coords:
         vmap = outputs['vmap_patch']
     else: 
         vmap = outputs['vmap']
-    cell_labels = make_cell_label_vol(outputs['stats'], outputs['iscell'][:, 0], vmap.shape,
+    if use_filtered_iscell and 'iscell_filtered' in outputs.keys():
+        iscell = outputs['iscell_filtered']
+    else:
+        iscell = outputs['iscell']
+    if len(iscell.shape) > 1:
+        iscell = iscell[:,0]
+    cell_labels = make_cell_label_vol(outputs['stats'], iscell, vmap.shape,
                                          lam_thresh=lam_thresh, use_patch_coords=use_patch_coords)
-    not_cell_labels = make_cell_label_vol(outputs['stats'], 1-outputs['iscell'][:, 0], vmap.shape,
+    not_cell_labels = make_cell_label_vol(outputs['stats'], 1-iscell, vmap.shape,
                                              lam_thresh=lam_thresh, use_patch_coords=use_patch_coords)
     v = napari.view_image(
         vmap, title=title, name=vmap_name, opacity=1.0, scale=scale)
@@ -122,7 +127,13 @@ def create_napari_ui(outputs, lam_thresh=0.3, title='3D Viewer', use_patch_coord
 
     not_cell_layer = v.add_labels(
         not_cell_labels, name='not-' +cell_label_name, opacity=0.5, scale=scale)
-
+    
+    if 'F' in outputs.keys():
+        if outputs['F'].shape[0] != len(iscell):
+            assert outputs['F'].shape[0] == iscell.sum()
+            trace_idxs = n.cumsum(iscell) - 1
+        else:
+            trace_idxs = n.arange(len(iscell))
 
     v.theme = theme
     widg_dict = {}
@@ -137,10 +148,13 @@ def create_napari_ui(outputs, lam_thresh=0.3, title='3D Viewer', use_patch_coord
     widg_dict['dock_widget'] = v.window.add_dock_widget(
         widg_dict['plot_widget'], name='activity', area='bottom')
 
+
+
     def get_traces(cell_idx):
-        fx = outputs['F'][cell_idx]
-        fn = outputs['Fneu'][cell_idx]
-        ss = outputs['spks'][cell_idx]
+        trace_idx = trace_idxs[cell_idx]
+        fx = outputs['F'][trace_idx]
+        fn = outputs['Fneu'][trace_idx]
+        ss = outputs['spks'][trace_idx]
         return outputs['ts'], fx, fn, ss
 
     def update_plot(widg_dict, cell_idx):
@@ -161,9 +175,9 @@ def create_napari_ui(outputs, lam_thresh=0.3, title='3D Viewer', use_patch_coord
             cell_idx = value - 1
             if event.button == 1:
                 update_plot(widg_dict, cell_idx)
-            if event.button == 2:
-                mark_cell(
-                    cell_idx, 0, outputs['iscell'], cell_layer, not_cell_layer)
+            # if event.button == 2:
+            #     mark_cell(
+            #         cell_idx, 0, outputs['iscell'], cell_layer, not_cell_layer)
 
     @not_cell_layer.mouse_drag_callbacks.append
     def on_click(not_cell_labels, event):
@@ -177,11 +191,75 @@ def create_napari_ui(outputs, lam_thresh=0.3, title='3D Viewer', use_patch_coord
             cell_idx = value - 1
             if event.button == 1:
                 update_plot(widg_dict, cell_idx)
-            if event.button == 2:
-                mark_cell(
-                    cell_idx, 1, outputs['iscell'], cell_layer, not_cell_layer)
+            # if event.button == 2:
+            #     mark_cell(
+            #         cell_idx, 1, outputs['iscell'], cell_layer, not_cell_layer)
 
     return v
+
+def make_ui_interactive(v, outputs, filters):
+    iscell_manual = outputs['iscell'][:,0]
+    stats = outputs['stats']
+    shape = outputs['vmap'].shape
+    iscell_filt_dir = os.path.join(outputs['dir'], 'iscell_filtered.npy')
+    print("Saving filtered cells to %s" % iscell_filt_dir)
+
+    ranges = [filt[1] for filt in filters]
+    sliders, values = add_filters(v, filters, outputs)
+    for slider in sliders:
+     slider.slider.sliderReleased.connect(lambda x=0 : update_cells(v, sliders, 
+                ranges, iscell_manual, iscell_filt_dir, stats, shape, values))
+    return sliders, values
+
+
+def update_cells(v, sliders, ranges, iscell_manual, iscell_filt_dir, stats, shape, values):
+        iscell = iscell_manual.copy()
+        print('Total: %d cells' % iscell.sum())
+        for i,slider in enumerate(sliders):
+            rng = list(slider.slider.value())
+            if rng[0] == ranges[i][0]: rng[0] = values[i].min()
+            if rng[1] == ranges[i][1]: rng[1] = values[i].max()
+            valid = get_valid_cells(values[i], rng)
+            iscell = n.logical_and(iscell, valid)
+            
+        print("%d cells valid" % iscell.sum())
+        v.layers['cells'].data = make_cell_label_vol(stats, iscell, shape,
+                            lam_thresh=0.3, use_patch_coords=False)
+        v.layers['not-cells'].data = make_cell_label_vol(stats, 1-iscell, shape,
+                            lam_thresh=0.3, use_patch_coords=False)
+        v.layers['cells'].refresh()
+        v.layers['not-cells'].refresh()
+        print("Updated layer data")
+        n.save(iscell_filt_dir, iscell)
+        print("Saved iscell")
+
+def add_slider(v, name, srange=(0,1), callback=None):
+    slider = QRangeSliderPopup()
+    slider.slider.setRange(*srange)
+    slider.slider.setSingleStep(0.1)
+    slider.slider.setValue(srange)
+    slider.slider._slider.sliderReleased.connect(slider.slider.sliderReleased.emit)
+    if callback is not None:
+        slider.slider.sliderReleased.connect(callback)
+    widget = v.window.add_dock_widget(slider, name=name, 
+                                             area='left', add_vertical_stretch=False)
+    return widget,slider
+
+def add_filters(v, filters, outputs, callback=None):
+    sliders = []
+    all_values = []
+    for filt in filters:
+        values = n.array([filt[3](stat[filt[2]]) for stat in outputs['stats']])
+        widget, slider = add_slider(v, filt[0], srange=filt[1], callback=callback)
+        sliders.append(slider)
+        all_values.append(values)
+    return sliders, all_values
+
+def get_valid_cells(prop, limits):
+    good_cells = n.logical_and(prop > limits[0], prop < limits[1])
+    return good_cells
+
+
 def mark_cell(cell_idx, mark_as, iscell=None, napari_cell_layer=None, napari_not_cell_layer=None, refresh=True):
     napari_idx = cell_idx + 1
     print("Marking cell %d (napari %d) as %d" %
@@ -194,8 +272,6 @@ def mark_cell(cell_idx, mark_as, iscell=None, napari_cell_layer=None, napari_not
         cell_layer_val = 0
         not_cell_layer_val = napari_idx
         coords = napari_cell_layer.data == napari_idx
-
-
 
     if napari_cell_layer is not None:
         napari_cell_layer.data[coords] = cell_layer_val
