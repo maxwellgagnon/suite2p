@@ -1,12 +1,16 @@
 
-import tifffile
+try:
+    import tifffile
+except: print("No tifffile")
 from cmath import log
 import datetime
 import os
 import numpy as n
 from . import init_pass
 from . import utils as u3d 
-import psutil
+try: 
+    import psutil
+except: print("No psutil")
 from suite2p.io import lbm as lbmio
 from multiprocessing import Pool
 from suite2p.suite3d.iter_step import register_dataset, fuse_and_save_reg_file, calculate_corrmap
@@ -130,7 +134,11 @@ class Job:
             dir_tag = dir_name
         
         dir_path = os.path.join(parent_dir, dir_name)
-        os.makedirs(dir_path, exist_ok = exist_ok)
+        if os.path.exists(dir_path):
+            self.log("Found dir %s with tag %s" % (dir_path, dir_tag), 2)
+        else:
+            os.makedirs(dir_path, exist_ok = exist_ok)
+            self.log("Created dir %s with tag %s" % (dir_path, dir_tag))
         self.dirs[dir_tag] = dir_path
         n.save(os.path.join(self.job_dir, 'dirs.npy'), self.dirs)
         return dir_path
@@ -192,63 +200,72 @@ class Job:
             tifs = self.tifs
         register_dataset(tifs, self.params, self.dirs, self.load_summary(), self.log, start_batch_idx = start_batch_idx)
 
-    def calculate_corr_map(self, mov=None, save=True, return_mov_filt=False, mov_sub_parent_dir = None, crop=None, svd_dir=None):
+    def calculate_corr_map(self, mov=None, save=True, return_mov_filt=False, crop=None, svd_info=None, iter_limit=None, parent_dir = None):
         self.save_params()
-        mov_sub_dir = self.make_new_dir('mov_sub', parent_dir_name=mov_sub_parent_dir)
+        mov_sub_dir_tag = 'mov_sub'
+        iter_dir_tag = 'iters'
+        if parent_dir is not None: 
+            mov_sub_dir_tag = parent_dir + '-' + mov_sub_dir_tag
+            iter_dir_tag = parent_dir + '-iters'
+            iter_dir = self.make_new_dir('iters', parent_dir_name=parent_dir, dir_tag=iter_dir_tag)
+        mov_sub_dir = self.make_new_dir('mov_sub', parent_dir_name=parent_dir, dir_tag=mov_sub_dir_tag)
         n.save(os.path.join(mov_sub_dir, 'params.npy'), self.params)
         self.log("Saving mov_sub to %s" % mov_sub_dir)
-        if svd_dir is not None:
-            self.log("Loading svd-d movie from %s" % svd_dir)
-            mov = svu.reconstruct_movie(svd_dir, t_batch_size = self.params['t_batch_size'])
-            self.log("Loaded svd movie of shape %s" % str(mov.shape))
+        if svd_info is not None:
+            mov = svd_info
         elif mov is None:
             mov = self.get_registered_movie('registered_fused_data', 'fused')
-        if crop is not None:
-            assert svd_dir is None, 'cant crop with svd - easy fix'
+        if crop is not None and svd_info is None:
+            assert svd_info is None, 'cant crop with svd - easy fix'
             self.params['detection_crop'] = crop
             self.save_params(dir='mov_sub')
             mov = mov[crop[0][0]:crop[0][1], :, crop[1][0]:crop[1][1], crop[2][0]:crop[2][1]]
             self.log("Cropped movie to shape: %s" % str(mov.shape))
-        return calculate_corrmap(mov, self.params, self.dirs, self.log, return_mov_filt=return_mov_filt, save=save)
+        return calculate_corrmap(mov, self.params, self.dirs, self.log, return_mov_filt=return_mov_filt, save=save,
+                                 iter_limit=iter_limit, iter_dir_tag=iter_dir_tag, mov_sub_dir_tag=mov_sub_dir_tag)
 
-    def detect_cells_from_patch(self, patch_idx = 0, zs=(None,None), ys=(None,None), xs=(None,None), ts=(None,None), 
-                                vmap=None, mov=None, compute_npil_masks=True,n_proc = 1, vmap_mask = None):
+    def detect_cells_from_patch(self, patch_idx = 0, coords = None,vmap_coords = None,
+                                vmap=None, mov=None, compute_npil_masks=True,n_proc = 8, ts=(None, None),
+                                parent_dir = None, extra_tag = None):
         # print('test')
         self.save_params()
-        detection_dir = self.make_new_dir('detection')
+        det_dir_tag = 'detection'
+        iter_dir_tag = 'iters'
+        mov_dir_tag = 'mov_sub'
         patch_str = 'patch-%04d' % patch_idx
-        patch_dir = self.make_new_dir(patch_str, parent_dir_name= 'detection')
+        patch_dir_tag = patch_str
+        if parent_dir is not None:
+            dir_prefix = parent_dir
+            if extra_tag is not None: dir_prefix = dir_prefix + '-' + extra_g
+            det_dir_tag = parent_dir + '-' + det_dir_tag
+            iter_dir_tag = parent_dir + '-' + iter_dir_tag
+            mov_dir_tag = parent_dir + '-' + mov_dir_tag
+            patch_dir_tag = parent_dir + '-' + patch_dir_tag
+        detection_dir = self.make_new_dir(det_dir_tag)
+        patch_dir = self.make_new_dir(patch_str, parent_dir_name= det_dir_tag, dir_tag = patch_dir_tag)
         n.save(os.path.join(patch_dir, 'params.npy'), self.params)
         stats_path = os.path.join(patch_dir, 'stats.npy')
         info_path = os.path.join(patch_dir, 'info.npy')
+        zs, ys, xs = coords
+        if vmap_coords is None:
+            vmap_coords = coords
+        vzs, vys, vxs = vmap_coords
         self.log("Running cell detection on patch %04d at %s, max %d iters" % (patch_idx, patch_dir, self.params['max_iter']))
         self.log("Patch bounds are %s, %s, %s" % (str(zs), str(ys), str(xs)))
-        patch_info = {'zs' : zs, 'ys' : ys, 'xs' : xs, 'all_params' : self.params}
-        if vmap is None:
-            iter_results = self.load_iter_results(-1)
-            if 'vmap' in iter_results:
-                vmap = iter_results['vmap']
-            else: 
-                vmap = iter_results['vmap2']**0.5
-        else:
-            print("Something about offsets should be fixed")
-            # vmap = vmap[zs[0]:zs[1], ys[0]:ys[1], xs[0]:xs[1]]
-        if self.params['normalize_vmap']:
-            vmap = ui.normalize_planes(vmap)
-        if vmap_mask is not None:
-            vmap = vmap * vmap_mask
-            patch_info['vmap_mask'] = vmap_mask
-        patch_info['vmap'] = vmap.copy()
-        vmap = vmap[zs[0]:zs[1], ys[0]:ys[1], xs[0]:xs[1]]
-        patch_info['vmap_patch'] = vmap.copy()
+        self.log("Cell center bounds are %s, %s, %s" % (str(vzs), str(vys), str(vxs)))
+        self.log("Time bounds are %s" % (str(ts)))
 
+        patch_info = {'zs' : zs, 'ys' : ys, 'xs' : xs, 'ts' : ts,
+                      'vzs' : vzs, 'vys' : vys, 'vxs' : vxs, 'all_params' : self.params}
         if mov is None:
-            mov = self.get_registered_movie('mov_sub', 'mov_sub',axis=0)
+            mov = self.get_registered_movie(mov_dir_tag, 'mov_sub',axis=0)
             nt, nz,ny,nx = mov.shape
             mov = mov[ts[0]:ts[1], zs[0]:zs[1], ys[0]:ys[1], xs[0]:xs[1]]
         else:
             __, nz, ny, nx = mov.shape
+
         if self.params['detection_timebin'] > 1:
+            self.log("Binning movie with a factor of %.2f" % self.params['detection_timebin'])
             mov = ext.binned_mean(mov, self.params['detection_timebin'])
         try:
             self.log("Loading %.2f GB movie to memory" % (mov.nbytes/1024**3))
@@ -256,6 +273,30 @@ class Job:
             self.log("Loaded")
         except:
             self.log("Not a dask array")
+
+
+        if vmap is None:
+            iter_results = self.load_iter_results(-1, dir_tag = iter_dir_tag)
+            if 'vmap' in iter_results:
+                vmap = iter_results['vmap']
+            else: 
+                vmap = iter_results['vmap2']**0.5
+        if self.params['normalize_vmap']:
+            vmap = ui.normalize_planes(vmap)
+        patch_info['vmap'] = vmap.copy()
+        patch_info['vmap_unmasked'] = vmap[zs[0]:zs[1], ys[0]:ys[1], xs[0]:xs[1]]
+        vmap_patch = n.zeros_like(mov[0])
+        dz = vzs[0] - zs[0]; dy = vys[0] - ys[0]; dx = vxs[0] - xs[0]
+        vmap_patch[dz:dz+(vzs[1]-vzs[0]),dy:dy+(vys[1]-vys[0]),dx:dx+(vxs[1]-vxs[0])] = \
+                            vmap[vzs[0]:vzs[1], vys[0]:vys[1], vxs[0]:vxs[1]]
+        vmap = vmap_patch
+
+        patch_info['vmap_patch'] = vmap.copy()
+        n.save(os.path.join(patch_dir, 'vmap_patch.npy'), vmap)
+        n.save(os.path.join(patch_dir, 'vmap_patch_unmasked.npy'),
+               patch_info['vmap_unmasked'])
+
+
         n.save(info_path, patch_info)
         self.log("Saving cell stats and info to %s" % patch_dir)
         # print(zs, ys, xs)
@@ -274,15 +315,17 @@ class Job:
                 stats = ext.compute_npil_masks_mp(stats, (nz,ny,nx), n_proc=n_proc)
                 self.log("Ended MP", 1)
         n.save(stats_path, stats)
-        return stats
+        patch_info['stats_path']  = stats_path
+        return patch_dir, patch_info, stats
 
     def extract_and_deconvolve(self, patch_idx=0, mov=None, batchsize_frames = 5000, stats = None, offset=None, 
-                               n_frames=None, stats_dir=None, iscell = None, ts=None, load_F_from_dir=False):
-        
+                               n_frames=None, stats_dir=None, iscell = None, ts=None, load_F_from_dir=False,
+                               parent_dir_tag=None):
         self.save_params()
         if stats_dir is None:
-            stats_dir = self.get_patch_dir(patch_idx)
-            stats, info = self.get_detected_cells(patch_idx)
+            stats_dir = self.get_patch_dir(patch_idx, parent_dir_tag=parent_dir_tag)
+            stats, info = self.get_detected_cells(
+                patch_idx, parent_dir_tag=parent_dir_tag)
             offset = (info['zs'],info['ys'],info['xs'])
         else:
             if stats is not None:
@@ -337,17 +380,18 @@ class Job:
         self.log("Saving to %s" % stats_dir)
         n.save(os.path.join(stats_dir, 'spks.npy'), spks)
         
-        return self.get_traces(stats_dir)
+        return self.get_traces(patch_dir=stats_dir)
 
-    def get_patch_dir(self, patch_idx = 0):
-        patch_str = 'patch-%04d' % patch_idx
-        if patch_str in self.dirs.keys():
-            return self.dirs[patch_str]
+    def get_patch_dir(self, patch_idx = 0, parent_dir_tag='detection'):
+        if type(patch_idx) == str:
+            patch_str = patch_idx
         else:
-            patch_dir = self.make_new_dir(patch_str, parent_dir_name= 'detection')
-            return self.dirs[patch_str]
-    def load_patch_results(self, patch_idx=0):
-        patch_dir = self.get_patch_dir(patch_idx)
+            patch_str = 'patch-%04d' % patch_idx
+        patch_dir = self.make_new_dir(patch_str, parent_dir_name= parent_dir_tag, 
+                                        dir_tag = parent_dir_tag + '-' + patch_str)
+        return patch_dir
+    def load_patch_results(self, patch_idx=0, parent_dir_tag = 'detection'):
+        patch_dir = self.get_patch_dir(patch_idx, parent_dir_tag)
         stats = n.load(os.path.join(patch_dir, 'stats.npy'), allow_pickle=True)
         info = n.load(os.path.join(patch_dir, 'info.npy'), allow_pickle=True).item()
         try: 
@@ -358,19 +402,22 @@ class Job:
         return stats, info, iscell
 
     def combine_patches(self, patch_idxs, combined_name, info_use_idx = 0, save=True,
-                        extra_stats_keys = []):
-        if save: combined_dir = self.make_new_dir(combined_name, parent_dir_name='detection')
+                        extra_stats_keys = [], parent_dir_tag = 'detection'):
+
+        if save: combined_dir = self.make_new_dir(combined_name, parent_dir_name=parent_dir_tag,
+                                                  dir_tag = parent_dir_tag + '-' + combined_name)
         stats = []
         iscells = []
-        keep_stats_keys = ['idx','threshold', 'coords', 'lam','med','peak_val']
+        keep_stats_keys = ['idx','threshold', 'coords', 'lam','med','peak_val', 'npcoords']
         keep_stats_keys += extra_stats_keys
 
         for patch_idx in patch_idxs:
-            stats_patch, info_patch, iscell = self.load_patch_results(patch_idx)
+            stats_patch, info_patch, iscell = self.load_patch_results(patch_idx, parent_dir_tag)
             for stat in stats_patch:
                 keep_stat =  {}
                 for key in keep_stats_keys:
-                    keep_stat[key] = stat[key]
+                    if key in stat.keys():
+                        keep_stat[key] = stat[key]
                 stats.append(keep_stat)
             iscells.append(iscell)
             if patch_idx == patch_idxs[info_use_idx]: info = info_patch
@@ -390,15 +437,14 @@ class Job:
 
             return combined_dir
 
-
-
-    def get_detected_cells(self, patch_idx = 0):
-        patch_dir = self.get_patch_dir(patch_idx)
+    def get_detected_cells(self, patch = 0, parent_dir_tag='detection'):
+        patch_dir = self.get_patch_dir(patch, parent_dir_tag=parent_dir_tag)
         stats = n.load(os.path.join(patch_dir, 'stats.npy'), allow_pickle=True)
         info = n.load(os.path.join(patch_dir, 'info.npy'), allow_pickle=True).item()
         return stats, info
-    def get_traces(self, patch_idx=0):
-        patch_dir = self.get_patch_dir(patch_idx)
+    def get_traces(self, patch_idx=0, parent_dir_tag='detection', patch_dir=None):
+        if patch_dir is None:
+            patch_dir = self.get_patch_dir(patch_idx, parent_dir_tag=parent_dir_tag)
         traces = {}
         for filename in ['F.npy', 'Fneu.npy', 'spks.npy']:
             if filename in os.listdir(patch_dir):
@@ -415,8 +461,8 @@ class Job:
         reg_files = [os.path.join(self.dirs['deepinterp'],x) for x in all_files if x.startswith('dp')]
         return reg_files
 
-    def get_iter_dirs(self):
-        iters_dir = self.dirs['iters']
+    def get_iter_dirs(self, dir_tag = 'iters'):
+        iters_dir = self.dirs[dir_tag]
         iter_dirs = [os.path.join(iters_dir, dir) for dir in os.listdir(iters_dir)]
         ret = []
         for dir in iter_dirs:
@@ -424,8 +470,8 @@ class Job:
                 ret.append(dir)
         return ret
     
-    def load_iter_results(self, iter_idx):
-        iter_dir = self.get_iter_dirs()[iter_idx]
+    def load_iter_results(self, iter_idx, dir_tag='iters'):
+        iter_dir = self.get_iter_dirs(dir_tag=dir_tag)[iter_idx]
         self.log("Loading from %s" % iter_dir)
         res = {}
         for filename in ['vmap', 'max_img', 'mean_img', 'sum_img', 'vmap2']:

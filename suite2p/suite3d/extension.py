@@ -140,8 +140,8 @@ def detect_cells_mp(patch, vmap, n_proc = 8, max_iter = 10000, peak_thresh = 2.5
                 med = batch_stats['med']
                 peak_val = batch_stats['peak_val']
                 npix = len(zz)
-                log("Added cell %d at %02d, %03d, %03d, peak: %0.3f, %d frames, %d pixels" % (
-                    len(stats), med[0], med[1], med[2], peak_val, len(batch_stats['active_frames']), npix), 2)
+                log("Added cell %d at %02d, %03d, %03d, peak: %0.3f, thresh: %.03f, %d frames, %d pixels" % (
+                    len(stats), med[0], med[1], med[2], peak_val, threshold, len(batch_stats['active_frames']), npix), 2)
 
         if savepath is not None and roi_idx % 250 == 0 and roi_idx > 0:
             n.save(savepath,stats)

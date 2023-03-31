@@ -5,27 +5,29 @@ from dask_image.ndfilters import uniform_filter as dask_uniform_filter
 import numpy as n
 import zarr
 import time
+from scipy import ndimage
 
 def default_log(string, val=None): print(string)
 
 
 def block_and_svd(mov_reg, n_comp, block_shape= (1, 128, 128), block_overlaps=(0, 18, 18),
-                  t_chunk=4000, pix_chunk= 12000, n_svd_blocks_per_batch = 36, svd_dir=None,
-                  block_validity=None, log_cb=default_log, flip_shape=False):
+                  t_chunk=4000, pix_chunk= None, n_svd_blocks_per_batch = 36, svd_dir=None,
+                  block_validity=None, log_cb=default_log, flip_shape=False, end_batch=None):
     if not flip_shape:
         nz, nt, ny, nx = mov_reg.shape
     elif flip_shape:
         nt, nz, ny, nx = mov_reg.shape
     blocks, grid_shape = make_blocks((nz, ny, nx), block_shape, block_overlaps)
-
+    if pix_chunk is None:
+        pix_chunk = n.product(block_shape)
     n_blocks = blocks.shape[1]
 
     log_cb("Will compute SVD in %d blocks in a grid shaped %s" %
            (n_blocks, str(grid_shape)), 1)
 
     n_batches = n.ceil(n_blocks / n_svd_blocks_per_batch)
-    log_cb("Batching %d blocks together, for a total of %d batches" %
-           (n_svd_blocks_per_batch, n_batches))
+    log_cb("Batching %d blocks together, for a total of %d batches. Pix chunksize: %d" %
+           (n_svd_blocks_per_batch, n_batches, pix_chunk))
 
     svd_block_dir = os.path.join(svd_dir, 'blocks')
     os.makedirs(svd_block_dir, exist_ok=True)
@@ -92,15 +94,62 @@ def block_and_svd(mov_reg, n_comp, block_shape= (1, 128, 128), block_overlaps=(0
         log_cb("Estimated time remaining for %d batches: %s" %
                (n_batches - batch_idx, est_time_str))
 
+        if end_batch is not None and end_batch == batch_idx:
+            print("Breaking")
+            return svd_info
         batch_idx += 1
     return svd_info
 
 
-def reconstruct_movie(svd_dir, t_batch_size=None, return_blocks=False, block_chunks=1, n_comps=None, old_func=False):
-    svd_info = n.load(os.path.join(svd_dir, 'svd_info.npy'), allow_pickle=True).item()
+def reconstruct_overlapping_movie(svd_info, t_indices, filt_size = None, block_chunks=1, normalize=True, n_comps = None, crop_z = None):
+    
+    ntx = t_indices[1] - t_indices[0]
+    t_batch_size = ntx
+    all_blocks = reconstruct_movie(svd_info, t_batch_size = t_batch_size, return_blocks=True, block_chunks=block_chunks, n_comps = n_comps)
+    
+    nz, nt, ny, nx = svd_info['mov_shape']
+    block_limits = svd_info['blocks']
+    nbz, nby, nbx = svd_info['block_shape']
+    n_blocks = svd_info['n_blocks']
+    
+    if crop_z is not None:
+        nz = crop_z[1] - crop_z[0]
+        valid_blocks = []
+        for i in range(n_blocks):
+            if block_limits[0,i,0] in range(*crop_z):
+                valid_blocks.append(i)
+        valid_blocks = n.array(valid_blocks)
+        all_blocks = all_blocks[valid_blocks]
+        n_blocks = all_blocks.shape[0]
+
+    mov3d = n.zeros((ntx, nz, ny, nx), dtype=n.float32)
+    norm3d = n.zeros((nz,ny,nx))
+    noz, noy, nox = svd_info['block_overlaps']
+    mask = n.zeros((nbz, nby, nbx)) 
+    bsize = 3
+    mask[(noz//bsize):(nbz-noz//bsize),(noy//bsize) : (nby-noy//bsize),(nox//bsize) : (nbx-nox//bsize)] = 1
+    fsize = 1.4
+    mask = ndimage.uniform_filter(mask, (noz//fsize, noy//fsize,nox//fsize))
+
+    all_blocks_batch = all_blocks[:, t_indices[0]:t_indices[1]].compute()
+    for i in range(n_blocks):
+        zz,yy,xx = block_limits[:,i]
+        block = all_blocks_batch[i].reshape(
+            t_batch_size, nbz, nby, nbx) * mask[n.newaxis]
+        mov3d[:,zz[0]:zz[1], yy[0]:yy[1], xx[0]:xx[1]] += block
+        norm3d[zz[0]:zz[1], yy[0]:yy[1], xx[0]:xx[1]] += mask
+    if normalize:
+        norm3d[norm3d < 1e-5] = n.inf
+        return mov3d / norm3d
+    else: return mov3d, norm3d
+
+def reconstruct_movie(svd_info, t_batch_size=None, return_blocks=False, block_chunks=1, n_comps=None, old_func=False):
+    if type(svd_info) == str:
+        svd_info = n.load(os.path.join(svd_info, 'svd_info.npy'), allow_pickle=True).item()
     svd_dirs = svd_info['svd_dirs']
 
-    us,ss,vs = load_stack_usvs(svd_dirs, svd_info['n_comps'],stack_axis=0)
+    if n_comps is None: n_comps = svd_info['n_comps']
+    us,ss,vs = load_stack_usvs(svd_dirs, n_comps,stack_axis=0)
     if old_func: 
         print("probably will go crazy")
         blocks_dn = reconstruct_from_stack_old(us,ss,vs, time_chunks=t_batch_size)
@@ -188,7 +237,7 @@ def run_svd_on_block(block, n_comp, svd_dir=None, save_zarr=True):
     return temp_vals
 
 
-def make_blocks_1d(axis_size, block_size, overlap):
+def make_blocks_1d(axis_size, block_size, overlap, nonoverlapping_mask=False):
     # solve overlap <= block_size - (axis_size - block_size) / (n_blocks - 1)
     # to get:
     # n_blocks >= (ax - bl) / (bl - ov)  + 1
@@ -197,16 +246,23 @@ def make_blocks_1d(axis_size, block_size, overlap):
     block_starts = n.linspace(0, axis_size-block_size, n_blocks).astype(int)
     block_ends = block_starts + block_size
     blocks = n.stack([block_starts, block_ends], axis=1)
+
+    if nonoverlapping_mask:
+        for i in range(blocks.shape[0]-1):
+            mean = int(n.floor((blocks[i,1] + blocks[i+1,0])/2))
+            blocks[i,1] = mean
+            blocks[i+1, 0] = mean
+
     return blocks
 
 
-def make_blocks(img_shape, block_shape, overlaps=(0, 36, 36)):
+def make_blocks(img_shape, block_shape, overlaps=(0, 36, 36), nonoverlapping_mask=False):
     bz, by, bx = block_shape
 
     bl_lims = []
     for i in range(3):
         bl_lims.append(make_blocks_1d(
-            img_shape[i], block_shape[i], overlaps[i]))
+            img_shape[i], block_shape[i], overlaps[i], nonoverlapping_mask=nonoverlapping_mask))
 
     z_start, y_start, x_start = n.meshgrid(
         *[xx[:, 0] for xx in bl_lims], indexing='ij')
@@ -418,7 +474,7 @@ def hpf_and_norm(u, s, v, window_size, norm_by_dif=True, out_t_chunk=None, use_h
 def load_usv(block_dir, n_comp, t_chunks=None, v_chunks=-1):
     u = darr.from_zarr(os.path.join(block_dir, 'u.zarr'))[:, :n_comp]
     if t_chunks is not None:
-        u = u.rechunk(t_chunks, -1)
+        u = u.rechunk((t_chunks, -1))
     s = darr.from_zarr(os.path.join(block_dir, 's.zarr'))[:n_comp]
     v = darr.from_zarr(os.path.join(block_dir, 'v.zarr'))[:n_comp]
     if v_chunks is not None:

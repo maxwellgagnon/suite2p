@@ -9,8 +9,8 @@ from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 import imreg_dft as imreg
 from multiprocessing import Pool, shared_memory
 from .. import default_ops
-import tensorflow as tf
-from tensorflow.keras.models import load_model
+# import tensorflow as tf
+# from tensorflow.keras.models import load_model
 from itertools import product
 from dask import array as darr
 from skimage.measure import moments

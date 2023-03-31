@@ -1,5 +1,4 @@
 
-
 from cmath import log
 import os
 from turtle import ht
@@ -8,14 +7,15 @@ import copy
 from multiprocessing import shared_memory, Pool
 from scipy.ndimage import uniform_filter
 from dask import array as darr
-
+import time
 from ..io import lbm as lbmio 
 from ..registration import register
 from . import utils
-from . import deepinterp as dp
+# from . import deepinterp as dp
 
 from ..detection import utils as det_utils
 from ..detection import detection3d as det3d
+from ..detection import svd_utils as svu
 
 import tracemalloc
 import traceback
@@ -40,7 +40,8 @@ def init_batches(tifs, batch_size, max_tifs_to_analyze=None):
     return batches
 
 
-def calculate_corrmap(mov, params, dirs, log_cb = default_log, save=True, return_mov_filt=False):
+def calculate_corrmap(mov, params, dirs, log_cb = default_log, save=True, return_mov_filt=False,iter_limit=None,
+                      iter_dir_tag = 'iters', mov_sub_dir_tag = 'mov_sub'):
     # TODO This can be accelerated 
     # np sub and convolution takes about ~1/2 of the time, that is parallelized
     # reminaing 1/2 of runtime is single-core, so overall improvement capped around 2x speed 
@@ -66,16 +67,30 @@ def calculate_corrmap(mov, params, dirs, log_cb = default_log, save=True, return
     log_cb("Using conv_filt: %s, %.2f, %.2f" % (conv_filt_type, conv_filt_z, conv_filt_xy), 1)
     log_cb("Using np_filt: %s, %.2f, %.2f" % (npil_filt_type, npil_filt_z, npil_filt_xy), 1)
 
-    nz, nt, ny, nx = mov.shape
-    flip_shape = True
-    if nt < nz:
-        nt, nz, ny, nx = mov.shape
-        flip_shape = False
-        log_cb("Shape is unexpected (%s). Modifying such that nt: %d and nz: %d" % (str(mov.shape), nt, nz))
+    reconstruct_svd = False
+    if type(mov) == dict:
+        svd_info = mov
+        svd_root = '\\'.join(svd_info['svd_dirs'][0].split('\\')[:-2])
+        n_comps = params.get('n_svd_comps', svd_info['n_comps'])
+        crop = params.get('svd_crop_z', None)
+        log_cb("Will reconstruct SVD movie on-the-fly from %s with %d components" % (svd_root, n_comps))
+        nz, nt, ny, nx = svd_info['mov_shape']
+        if crop is not None: 
+            nz = crop[1] - crop[0]
+            log_cb("Cropping z from %d to %d" % crop, 3)
+        reconstruct_svd = True
+    else:
+        nz, nt, ny, nx = mov.shape
+        flip_shape = True
+        if nt < nz:
+            nt, nz, ny, nx = mov.shape
+            flip_shape = False
+            log_cb("Shape is unexpected (%s). Modifying such that nt: %d and nz: %d" % (str(mov.shape), nt, nz))
+
     n_batches = int(n.ceil(nt / t_batch_size))
     if save:
-        batch_dirs, __ = init_batch_files(dirs['iters'], makedirs=True, n_batches=n_batches)
-        __, mov_sub_paths = init_batch_files(None, dirs['mov_sub'], makedirs=False, n_batches=n_batches, filename='mov_sub')
+        batch_dirs, __ = init_batch_files(dirs[iter_dir_tag], makedirs=True, n_batches=n_batches)
+        __, mov_sub_paths = init_batch_files(None, dirs[mov_sub_dir_tag], makedirs=False, n_batches=n_batches, filename='mov_sub')
         # print(mov_sub_paths)
         log_cb("Created files and dirs for %d batches" % n_batches, 1)
     else: mov_sub_paths = [None] * n_batches
@@ -86,20 +101,28 @@ def calculate_corrmap(mov, params, dirs, log_cb = default_log, save=True, return
     sdmov2 = n.zeros((nz,ny,nx))
     n_frames_proc = 0 
     for batch_idx in range(n_batches):
+        if iter_limit is not None and batch_idx == iter_limit:
+            break
         log_cb("Running batch %d of %d" % (batch_idx + 1, n_batches), 2)
         st_idx = batch_idx * t_batch_size
         end_idx = min(nt, st_idx + t_batch_size)
         n_frames_proc += end_idx - st_idx
-        if flip_shape:
-            movx = mov[:,st_idx:end_idx]
-            movx = darr.swapaxes(movx, 0, 1).compute().astype(dtype)
+        if reconstruct_svd:
+            recon_tic = time.time()
+            log_cb("Reconstructing from svd", 3)
+            movx = svu.reconstruct_overlapping_movie(svd_info, t_indices = (st_idx, end_idx),n_comps=n_comps, crop_z = crop)
+            log_cb("Reconstructed in %.2f seconds" % (time.time() - recon_tic),3 )
         else:
-            movx = mov[st_idx:end_idx]
-            try:
-                movx = movx.compute()
-            except:
-                log_cb("Not a dask array", 3)
-            movx = movx.astype(dtype)
+            if flip_shape:
+                movx = mov[:,st_idx:end_idx]
+                movx = darr.swapaxes(movx, 0, 1).compute().astype(dtype)
+            else:
+                movx = mov[st_idx:end_idx]
+                try:
+                    movx = movx.compute()
+                except:
+                    log_cb("Not a dask array", 3)
+                movx = movx.astype(dtype)
         log_cb("Loaded and swapped, idx %d to %d" % (st_idx, end_idx), 2)
         log_cb("Calculating corr map",2)
         mov_filt = calculate_corrmap_for_batch(movx, sdmov2, vmap2, mean_img, max_img, temporal_hpf, npil_filt_size, unif_filt_size, intensity_thresh,

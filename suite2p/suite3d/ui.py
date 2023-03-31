@@ -2,12 +2,19 @@ import os
 import shutil
 import numpy as n
 from matplotlib import pyplot as plt
-import napari
 from argparse import Namespace
 import pyqtgraph as pg
-from napari._qt.widgets.qt_range_slider_popup import QRangeSliderPopup
 
-def load_outputs(dir, files = ['stats.npy', 'F.npy', 'Fneu.npy', 'spks.npy', 'info.npy', 'iscell_filtered.npy', 'iscell_extracted.npy', 'iscell.npy', 'vmap.npy', 'im3d.npy'], return_namespace=False, additional_outputs = {}, regen_iscell=False):
+try: 
+    import napari
+except:
+    print("No Napari")
+
+try: from napari._qt.widgets.qt_range_slider_popup import QRangeSliderPopup
+except: pass
+
+
+def load_outputs(dir, files = ['stats.npy', 'F.npy', 'Fneu.npy', 'spks.npy', 'info.npy', 'iscell_filtered.npy', 'iscell_extracted.npy', 'iscell.npy', 'vmap.npy', 'im3d.npy', 'vmap_patch.npy'], return_namespace=False, additional_outputs = {}, regen_iscell=False):
     outputs = {'dir' : dir}
     for filename in files:
         if filename in os.listdir(dir):
@@ -91,7 +98,8 @@ def update_iscell(iscell, dir):
     iscell_path = os.path.join(dir, 'iscell.npy')
     n.save(iscell_path, iscell)
 
-def create_napari_ui(outputs, lam_thresh=0.3, title='3D Viewer', use_patch_coords=False, scale=(15,4,4), theme='dark', extra_cells=None, extra_cells_names=None,
+
+def create_napari_ui(outputs, lam_thresh=0.3, title='3D Viewer', use_patch_coords=False, scale=(15,4,4), theme='dark', extra_cells=None, extra_cells_names=None, vmap_limits=None,
                      extra_images = None, extra_images_names = None, cell_label_name='cells', vmap_name='corr map', use_filtered_iscell=True):
     if use_patch_coords:
         vmap = outputs['vmap_patch']
@@ -108,7 +116,7 @@ def create_napari_ui(outputs, lam_thresh=0.3, title='3D Viewer', use_patch_coord
     not_cell_labels = make_cell_label_vol(outputs['stats'], 1-iscell, vmap.shape,
                                              lam_thresh=lam_thresh, use_patch_coords=use_patch_coords)
     v = napari.view_image(
-        vmap, title=title, name=vmap_name, opacity=1.0, scale=scale)
+        vmap, title=title, name=vmap_name, opacity=1.0, scale=scale, contrast_limits=vmap_limits)
     if extra_images is not None:
         for i, extra_image in enumerate(extra_images):
             v.add_image(
