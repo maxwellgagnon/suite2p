@@ -432,7 +432,7 @@ def extract_activity_mp(mov, stats, batchsize_frames=500, log=default_log, offse
         log("Only extracting %d frames" % n_frames)
         mov = mov[:,:n_frames]
         nt = mov.shape[1]
-    # print(mov.shape)
+    print(mov.shape)
     ns = len(stats)
     F_roi = n.zeros((ns, nt))
     F_neu = n.zeros((ns, nt))

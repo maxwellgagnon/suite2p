@@ -5,6 +5,7 @@ except: print("No tifffile")
 from cmath import log
 import datetime
 import os
+import copy
 import numpy as n
 from . import init_pass
 from . import utils as u3d 
@@ -74,13 +75,15 @@ class Job:
                 header = '\n[%s][%02d] ' % (datetime_string, level)
                 f.write(header + '   ' * level + string)
 
-    def save_params(self, new_params=None, dir = 'job_dir'):
+    def save_params(self, new_params=None, dir = 'job_dir', params=None):
         """Update saved params in job_dir/params.npy
         """
+        if params is None:
+            params = self.params
         params_path = os.path.join(self.dirs[dir], 'params.npy')
         if new_params is not None:
-            self.params.update(new_params)
-        n.save(params_path, self.params)
+            params.update(new_params)
+        n.save(params_path, params)
         self.log("Updated params file: %s" % params_path)
 
     def load_params(self, dir = None):
@@ -89,6 +92,7 @@ class Job:
         params_path = os.path.join(self.dirs[dir], 'params.npy')
         self.params = n.load(params_path, allow_pickle=True).item()
         self.log("Found and loaded params from %s" % params_path)
+        return self.params
 
     def load_summary(self):
         summary_path = os.path.join(self.dirs['summary'], 'summary.npy')
@@ -122,8 +126,19 @@ class Job:
         self.save_dirs()
         return extension_dir
 
-    def save_dirs(self):
-        n.save(os.path.join(self.job_dir, 'dirs.npy'), self.dirs)
+    def save_dirs(self, name='dirs', dirs=None):
+        if dirs is None: dirs = self.dirs
+        n.save(os.path.join(self.job_dir, '%s.npy' % name), dirs)
+
+    def update_root_path(self, new_root):
+        old_dirs = copy.deepcopy(self.dirs)
+        root_len = self.dirs['summary'].find('s3d-' + self.job_id)
+        self.log("Replacing %s with %s" % (self.dirs['summary'][:root_len], new_root))
+        for k,v in self.dirs.items():
+            self.dirs[k] = os.path.join(new_root, v[root_len:])
+        self.save_dirs()
+        self.save_dirs('old_dirs_%d' % n.random.randint(1,1e9), old_dirs)
+
 
     def make_new_dir(self, dir_name, parent_dir_name = None, exist_ok=True, dir_tag = None):
         if parent_dir_name is None:
@@ -194,11 +209,16 @@ class Job:
         n.save(os.path.join(self.dirs['summary'],
                'summary.npy'), summary_old_job)
     
-    def register(self, tifs=None, start_batch_idx = 0):
-        self.save_params()
+    def register(self, tifs=None, start_batch_idx = 0, params=None, summary=None):
+        if params is None:
+            params = self.params
+        self.save_params(params=params, dir='registered_data')
+        if summary is None:
+            summary = self.load_summary()
+        n.save(os.path.join(self.dirs['registered_data'], 'summary.npy'), summary)
         if tifs is None:
             tifs = self.tifs
-        register_dataset(tifs, self.params, self.dirs, self.load_summary(), self.log, start_batch_idx = start_batch_idx)
+        register_dataset(tifs, params, self.dirs, summary, self.log, start_batch_idx = start_batch_idx)
 
     def calculate_corr_map(self, mov=None, save=True, return_mov_filt=False, crop=None, svd_info=None, iter_limit=None, parent_dir = None):
         self.save_params()
@@ -320,7 +340,7 @@ class Job:
 
     def extract_and_deconvolve(self, patch_idx=0, mov=None, batchsize_frames = 5000, stats = None, offset=None, 
                                n_frames=None, stats_dir=None, iscell = None, ts=None, load_F_from_dir=False,
-                               parent_dir_tag=None):
+                               parent_dir_tag=None, save_dir = None):
         self.save_params()
         if stats_dir is None:
             stats_dir = self.get_patch_dir(patch_idx, parent_dir_tag=parent_dir_tag)
@@ -343,7 +363,7 @@ class Job:
             mov = self.get_registered_movie('registered_fused_data','')
         if ts is not None:
             mov = mov[:,ts[0]:ts[1]]
-
+        if save_dir is None: save_dir = stats_dir
         if iscell is not None:
             if type(iscell) == str:
                 if iscell[-4:] != '.npy': iscell += '.npy'
@@ -354,7 +374,7 @@ class Job:
             assert iscell.shape[0] == len(stats)
 
             valid_stats = [stat for i,stat in enumerate(stats) if iscell[i]]
-            save_iscell = os.path.join(stats_dir, 'iscell_extracted.npy')
+            save_iscell = os.path.join(save_dir, 'iscell_extracted.npy')
             self.log("Extracting %d valid cells, and saving cell flags to %s" % (len(valid_stats), save_iscell))
             stats = valid_stats
             n.save(save_iscell, iscell)
@@ -362,8 +382,8 @@ class Job:
         if not load_F_from_dir:
             self.log("Extracting activity")
             F_roi, F_neu = ext.extract_activity(mov, stats, batchsize_frames=batchsize_frames, offset=offset, n_frames=n_frames)
-            n.save(os.path.join(stats_dir, 'F.npy'), F_roi)
-            n.save(os.path.join(stats_dir, 'Fneu.npy'), F_neu)
+            n.save(os.path.join(save_dir, 'F.npy'), F_roi)
+            n.save(os.path.join(save_dir, 'Fneu.npy'), F_neu)
         else:
             F_roi = n.load(os.path.join(stats_dir, 'F.npy'))
             F_neu = n.load(os.path.join(stats_dir, 'Fneu.npy'))
@@ -377,10 +397,10 @@ class Job:
         spks = dcnv.oasis(F_sub, batch_size = self.params['dcnv_batchsize'], tau=self.params['tau'],
                          fs=self.params['fs'])
                          
-        self.log("Saving to %s" % stats_dir)
-        n.save(os.path.join(stats_dir, 'spks.npy'), spks)
+        self.log("Saving to %s" % save_dir)
+        n.save(os.path.join(save_dir, 'spks.npy'), spks)
         
-        return self.get_traces(patch_dir=stats_dir)
+        return self.get_traces(patch_dir=save_dir)
 
     def get_patch_dir(self, patch_idx = 0, parent_dir_tag='detection'):
         if type(patch_idx) == str:
@@ -479,7 +499,8 @@ class Job:
                 res[filename] = n.load(os.path.join(iter_dir, filename + '.npy'))
         return res
 
-    def fuse_registered_movie(self, n_shift, n_buf, files=None, save=False, n_proc=4, delete_original=False):
+    def fuse_registered_movie(self, files=None, save=False, n_proc=4, delete_original=False, parent_dir=None):
+        n_skip = self.params['n_skip']
         if files is None:
             files = self.get_registered_files()
         __, xs = lbmio.load_and_stitch_full_tif_mp(
@@ -488,20 +509,51 @@ class Job:
         shift_xs = n.round(self.load_summary()[
                            'plane_shifts'][:, 1]).astype(int)
         if save:
-            reg_fused_dir = self.make_new_dir('registered_fused_data')
+            reg_fused_dir = self.make_new_dir('registered_fused_data', parent_dir_name=parent_dir)
         else:
             reg_fused_dir = ''
+        self.log("Saving to %s" % reg_fused_dir)
+        self.save_params(dir=parent_dir)
 
         # if you get an assertion error here with save=False in _get_more_data, assert left > 0
         # congratulations, you have run into a bug in Python itself! 
         # https://bugs.python.org/issue34563, https://stackoverflow.com/questions/47692566/
         # the files are too big! 
-        with Pool(n_proc) as p:
-            fused_files = p.starmap(fuse_and_save_reg_file, [(
-                file, reg_fused_dir, centers,  shift_xs, n_shift, n_buf, None, None, save, delete_original) for file in files])
+        if n_proc > 1:
+            with Pool(n_proc) as p:
+                fused_files = p.starmap(fuse_and_save_reg_file, [(
+                    file, reg_fused_dir, centers,  shift_xs, n_skip, None, None, save, delete_original) for file in files])
+        else:
+            self.log("Single processor")
+            fused_files = [fuse_and_save_reg_file(file, reg_fused_dir, centers,  shift_xs, n_skip, None, None, save, delete_original) for file in files]
         if not save:
+            # return fused_files
             fused_files = n.concatenate(fused_files, axis=1)
         return fused_files
+
+    def svd_decompose_movie(self, svd_dir_tag):
+        svd_dir = self.dirs[svd_dir_tag]
+        mov = self.get_registered_movie('registered_fused_data','')
+        if self.params.get('svd_crop', None) is not None:
+            crop = self.params['svd_crop']
+            mov = mov[crop[0][0]:crop[0][1], :,crop[1][0]:crop[1][1], crop[2][0]:crop[2][1]]
+            self.log("Cropped to size %s" % str(mov.shape))
+        
+        if self.params.get('svd_pix_chunk') is None:
+            self.params['svd_pix_chunk'] = n.product(self.params['svd_block_shape'])
+        if self.params.get('n_svd_blocks_per_batch') is None:
+            self.params['n_svd_blocks_per_batch'] = 16
+        self.save_params(dir=svd_dir_tag)
+        # return
+        svd_info = svu.block_and_svd(mov, n_comp = self.params['n_svd_comp'], 
+                               block_shape = self.params['svd_block_shape'],
+                               block_overlaps = self.params['svd_block_overlaps'],
+                               pix_chunk = self.params['svd_pix_chunk'],
+                               n_svd_blocks_per_batch = self.params['n_svd_blocks_per_batch'],
+                               log_cb = self.log,
+                               svd_dir = svd_dir)
+        return svd_info
+
 
     def get_subtracted_movie(self):
         mov_sub_paths = []

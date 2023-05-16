@@ -37,7 +37,7 @@ def load_init_tifs(init_tifs, planes, filter_params):
 
     return full_mov
 
-def prep_registration(full_mov, reg_ops, log_callback=default_log, filter_pcorr=0):
+def prep_registration(full_mov, reg_ops, log_callback=default_log, filter_pcorr=0, force_plane_shifts=None):
     nz, nt, ny, nx = full_mov.shape
     ref_img_3d = []
     log_callback("Computing reference images")
@@ -47,7 +47,10 @@ def prep_registration(full_mov, reg_ops, log_callback=default_log, filter_pcorr=
         log_callback("  Computed reference for plane %d" % i,2)
     ref_img_3d = n.array(ref_img_3d)
 
-    tvecs = n.concatenate([[[0,0]], utils.get_shifts_3d(ref_img_3d, filter_pcorr=filter_pcorr)])
+    ref_img_3d_unaligned = n.copy(ref_img_3d)
+    if force_plane_shifts is None:
+        tvecs = n.concatenate([[[0,0]], utils.get_shifts_3d(ref_img_3d, filter_pcorr=filter_pcorr)])
+    else: tvecs = force_plane_shifts
     log_callback("Tvecs: %s" % str(tvecs), 2)
 
     ref_img_3d_aligned = utils.register_movie(ref_img_3d[:,n.newaxis], tvecs=tvecs)[:,0]
@@ -64,7 +67,7 @@ def prep_registration(full_mov, reg_ops, log_callback=default_log, filter_pcorr=
         all_ref_and_masks.append(ref_and_masks)
         all_ops.append(plane_ops)
 
-    return tvecs, ref_img_3d_aligned, all_ops, all_ref_and_masks
+    return tvecs, ref_img_3d_aligned, all_ops, all_ref_and_masks, ref_img_3d_unaligned
 
 
 def register_sample_movie(full_mov, all_ops, all_refs, in_place=True, log_callback=default_log):
@@ -130,10 +133,11 @@ def run_init_pass(job):
                                         'nonrigid' : job.params['nonrigid']})
 
     job.log("Aligning planes and calculating reference images")
-    tvecs, ref_img_3d, all_ops, all_refs_masks = prep_registration(init_mov, reg_ops, job.log, filter_pcorr=params['reg_filter_pcorr'])
+    tvecs, ref_img_3d, all_ops, all_refs_masks, ref_img_3d_unaligned = prep_registration(init_mov, reg_ops, job.log, filter_pcorr=params['reg_filter_pcorr'], force_plane_shifts = params.get('force_plane_shifts', None))
 
     summary = {
         'ref_img_3d' : ref_img_3d,
+        'ref_img_3d_unaligned' : ref_img_3d_unaligned,
         'crosstalk_coeff' : cross_coeff,
         'plane_shifts' : tvecs,
         'refs_and_masks' : all_refs_masks,

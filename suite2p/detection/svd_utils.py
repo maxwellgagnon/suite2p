@@ -12,7 +12,8 @@ def default_log(string, val=None): print(string)
 
 def block_and_svd(mov_reg, n_comp, block_shape= (1, 128, 128), block_overlaps=(0, 18, 18),
                   t_chunk=4000, pix_chunk= None, n_svd_blocks_per_batch = 36, svd_dir=None,
-                  block_validity=None, log_cb=default_log, flip_shape=False, end_batch=None):
+                  block_validity=None, log_cb=default_log, flip_shape=False, end_batch=None,
+                  start_batch = 0, other_info = {}):
     if not flip_shape:
         nz, nt, ny, nx = mov_reg.shape
     elif flip_shape:
@@ -32,21 +33,27 @@ def block_and_svd(mov_reg, n_comp, block_shape= (1, 128, 128), block_overlaps=(0
     svd_block_dir = os.path.join(svd_dir, 'blocks')
     os.makedirs(svd_block_dir, exist_ok=True)
     log_cb("Saving SVD blocks in %s" % svd_block_dir)
-
-    svd_info = {
-        'n_blocks': n_blocks,
-        'block_shape': block_shape,
-        'block_overlaps': block_overlaps,
-        'blocks': blocks,
-        'grid_shape': grid_shape,
-        'mov_shape': mov_reg.shape,
-        'n_comps': n_comp,
-        'svd_dirs': []
-    }
     svd_info_path = os.path.join(svd_dir, 'svd_info.npy')
 
-    batch_idx = 1
-    for batch_start in range(0, n_blocks, n_svd_blocks_per_batch):
+    if start_batch == 0:
+        svd_info = {
+            'n_blocks': n_blocks,
+            'block_shape': block_shape,
+            'block_overlaps': block_overlaps,
+            'blocks': blocks,
+            'grid_shape': grid_shape,
+            'mov_shape': mov_reg.shape,
+            'n_comps': n_comp,
+            'svd_dirs': []
+        }
+        svd_info.update(other_info)
+    else:
+        print("Loading SVD info from %s" % svd_info_path)
+        svd_info = n.load(svd_info_path, allow_pickle=True).item()
+
+    batch_idx = start_batch + 1
+    print("Starting with batch %d" % start_batch)
+    for batch_start in range(start_batch*n_svd_blocks_per_batch, n_blocks, n_svd_blocks_per_batch):
         tic = time.time()
         batch_end = min(batch_start + n_svd_blocks_per_batch, n_blocks)
         log_cb("Starting batch %d / %d, blocks %d - %d" %

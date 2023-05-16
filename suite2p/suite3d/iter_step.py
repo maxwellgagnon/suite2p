@@ -273,18 +273,68 @@ def register_mov(mov3d, refs_and_masks, all_ops, log_cb = default_log, convolve_
     return all_offsets
      
 
-def fuse_and_save_reg_file(reg_file, reg_fused_dir, centers, shift_xs, nshift, nbuf, crops=None, mov=None, save=True, delete_original=False):
+def fuse_movie(mov, n_skip, centers, shift_xs):
+    n_skip_l = n_skip // 2
+    n_skip_r = n_skip - n_skip_l
+    nz, nt, ny, nx = mov.shape
+
+    centers = n.concatenate([centers , [nx]])
+    # print(centers)
+    n_seams = len(centers)
+    nxnew = nx - (n_skip) * (n_seams )
+    # print(nxnew)
+    mov_fused = n.zeros((nz, nt, ny, nxnew), dtype=mov.dtype)
+
+    for zidx in range(nz):
+        curr_x = 0
+        curr_x_new = 0
+        for i in range(n_seams):
+            wid = (centers[i] + shift_xs[zidx]) - curr_x
+            mov_fused[zidx, :, :, curr_x_new: curr_x_new + wid - n_skip] = \
+                mov[zidx, :, :, curr_x + n_skip_l: curr_x + wid - n_skip_r]
+            curr_x_new += wid - n_skip
+            curr_x += wid
+
+    return mov_fused
+
+
+def fuse_and_save_reg_file(reg_file, reg_fused_dir, centers, shift_xs, n_skip, crops=None, mov=None, save=True, delete_original=False):
     file_name = reg_file.split(os.sep)[-1]
     fused_file_name = os.path.join(reg_fused_dir, 'fused_' + file_name)
     if mov is None: 
+        print("Loading")
         mov = n.load(reg_file)
+        print("Loaded")
+
+    mov_fused = fuse_movie(mov, n_skip, centers, shift_xs)
+    
+    if crops is not None:
+        mov_fused = mov_fused[crops[0][0]:crops[0][1], :, crops[1][0]:crops[1][1], crops[2][0]:crops[2][1]]
+    if delete_original:
+        print("Delelting file: %s" % reg_file)
+        os.remove(reg_file)
+    if save: 
+        n.save(fused_file_name, mov_fused)
+        return fused_file_name
+    else: return mov_fused
+
+
+
+def fuse_and_save_reg_file_old(reg_file, reg_fused_dir, centers, shift_xs, nshift, nbuf, crops=None, mov=None, save=True, delete_original=False):
+    file_name = reg_file.split(os.sep)[-1]
+    fused_file_name = os.path.join(reg_fused_dir, 'fused_' + file_name)
+    if mov is None: 
+        print("Loading")
+        mov = n.load(reg_file)
+        print("Loaded")
     nz, nt, ny, nx = mov.shape
     weights = n.linspace(0, 1, nshift)
     n_seams = len(centers)
     nxnew = nx - (nshift + nbuf) * n_seams
     mov_fused = n.zeros((nz, nt, ny, nxnew), dtype=mov.dtype)
-
+    print("Looping")
     for zidx in range(nz):
+        print(zidx)
         curr_x = 0
         curr_x_new = 0
         for i in range(n_seams):
@@ -372,7 +422,7 @@ def register_dataset(tifs, params, dirs, summary, log_cb = default_log,
     all_ops = summary.get('all_ops',None)
     job_iter_dir = dirs['iters']
     job_reg_data_dir = dirs['registered_data']
-    n_tifs_to_analyze = params['total_tifs_to_analyze']
+    n_tifs_to_analyze = params.get('total_tifs_to_analyze', len(tifs))
     tif_batch_size = params['tif_batch_size']
     planes = params['planes']
     notch_filt = params['notch_filt']
