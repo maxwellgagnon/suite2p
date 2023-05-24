@@ -4,6 +4,7 @@ import numpy as n
 from matplotlib import pyplot as plt
 from argparse import Namespace
 import pyqtgraph as pg
+import copy
 
 try: 
     import napari
@@ -13,8 +14,178 @@ except:
 try: from napari._qt.widgets.qt_range_slider_popup import QRangeSliderPopup
 except: pass
 
+def load_outputs(output_dir, load_traces = False):
+    files = os.listdir(output_dir)
+    outputs = {}
+    outputs['dir'] = output_dir
+    info = n.load(os.path.join(output_dir, 'info.npy'),allow_pickle=True).item()
+    outputs['vmap'] = info['vmap']
+    outputs['max_img'] = info['max_img']
+    outputs['mean_img'] = info['mean_img']
+    outputs['fs'] = info['all_params']['fs']
+    outputs['stats'] = n.load(os.path.join(output_dir, 'stats.npy'),allow_pickle=True)
 
-def load_outputs(dir, files = ['stats.npy', 'F.npy', 'Fneu.npy', 'spks.npy', 'info.npy', 'iscell_filtered.npy', 'iscell_extracted.npy', 'iscell.npy', 'vmap.npy', 'im3d.npy', 'vmap_patch.npy'], return_namespace=False, additional_outputs = {}, regen_iscell=False):
+    if 'iscell.npy' in files:
+        outputs['iscell'] = n.load(os.path.join(output_dir, 'iscell.npy'))
+    else:
+        outputs['iscell'] = n.ones((len(outputs['stats'],2)))
+
+    if load_traces:
+        traces = {}
+        for filename in ['F','Fneu','spks','iscell_extracted']:
+            if filename + '.npy' in files:
+                traces[filename] = n.load(os.path.join(output_dir, filename + '.npy'))
+            else: print("Not found: %s.npy" % filename)
+            assert len(traces) > 0
+        outputs.update(traces)
+    return outputs
+
+
+def get_percentiles(image, pmin=1, pmax=99):
+    im_f = image.flatten()
+    vmin = n.percentile(im_f, pmin)
+    vmax = n.percentile(im_f, pmax)
+    return vmin, vmax
+
+def make_label_vols(stats, shape, lam_max = 0.3, iscell=None, cmap='Set3'):
+    coords = [stat['coords'] for stat in stats]
+    lams = [stat['lam'] for stat in stats]
+    cmap = plt.get_cmap(cmap)
+    n_cmap = cmap.N
+    cell_id_vol = n.zeros(shape, int)
+    cell_rgb_vol = n.zeros(shape + (4,))
+    if iscell is None: iscell = n.ones((len(stats),2))
+    for i in range(len(stats)):
+        if iscell[i,0]:
+            cz,cy,cx = coords[i]
+            lam = copy.copy(lams[i])
+            # print(lam)3
+            lam /= lam_max; lam[lam > 1] = 1
+            cell_id_vol[cz,cy,cx] = i  + 1
+            cell_rgb_vol[cz,cy,cx, :3] = cmap(i % n_cmap)[:3]
+            # print(lam)
+            cell_rgb_vol[cz,cy,cx, 3] = lam
+    return cell_id_vol, cell_rgb_vol
+
+
+def create_ui(outputs, cmap='Set3', lam_max = 0.3, scale=(15,4,4)):
+    stats = outputs['stats']; mean_img = outputs['mean_img'];
+    vmap = outputs['vmap']; max_img = outputs['max_img']
+    iscell = outputs['iscell_extracted'] if 'iscell_extracted' in outputs.keys() else outputs['iscell']
+    if len(iscell.shape) < 2: iscell = iscell[:,n.newaxis]
+    shape = vmap.shape
+    coords = [stat['coords'] for stat in stats]
+    lams = [stat['lam'] for stat in stats]
+    layers = {}
+    cell_id_vol, noncell_id_vol, cell_rgb_vol, noncell_rgb_vol = update_vols(stats, shape,
+                                        iscell, layers, cmap, lam_max, scale, update_layers=False)
+    clims_mean = get_percentiles(mean_img, 0, 99.5)
+    clims_max = get_percentiles(max_img, 0, 99.5)
+    clims_vmap = get_percentiles(vmap, 0, 99.9)
+
+    v = napari.view_image(max_img,name='Max Image',contrast_limits=clims_max, scale=scale)
+    layers['vmap_layer'] = v.add_image(vmap, name='Corr Map', contrast_limits=clims_vmap, scale=scale)
+    layers['mimg_layer'] = v.add_image(mean_img, name='Mean Img', contrast_limits=clims_mean, scale=scale)
+    layers['nvol_layer'] = v.add_image(noncell_rgb_vol, name='Non cells', rgb=True, 
+                                       scale=scale, visible=False)
+    layers['cvol_layer'] = v.add_image(cell_rgb_vol, name='Cells', rgb=True, scale=scale)
+    layers['clabel'] = cell_id_vol.astype(int)
+    layers['nclabel'] = noncell_id_vol.astype(int)
+    # layers['nclabel_layer'] = v.add_labels(noncell_id_vol.astype(int), name='Non cells (labels)', 
+                                        #    scale=scale, opacity=0)
+    # layers['clabel_layer'] = v.add_labels(cell_id_vol.astype(int), name='Cells (labels)', 
+                                        #   scale=scale, opacity=0)
+
+    return v, layers
+
+import datetime
+def add_callbacks_to_ui(v, layers, outputs, savedir):
+    spks = outputs['spks']; F = outputs['F']; Fneu = outputs['Fneu']
+    iscell = outputs['iscell_extracted']
+    if len(iscell.shape) < 2: iscell = iscell[:,n.newaxis]
+    iscell_savepath = os.path.join(savedir, 'iscell_curated.npy')
+    if os.path.exists(iscell_savepath):
+        string = datetime.datetime.now().strftime('%d-%m-%y_%H-%M-%S')
+        iscell_curated = n.load(iscell_savepath)
+        backup_path = os.path.join(savedir, 'iscell_curated_old_%s.npy' % string)
+        print("Saving old iscell_curated to backup path %s" % backup_path)
+        n.save(backup_path, iscell_curated)
+    else:
+        iscell_curated = iscell.copy()
+    
+    n_roi, nt = spks.shape
+    ts = n.arange(nt) / outputs['fs']
+    widgets = {}
+    widgets['plot_widget'] = pg.PlotWidget()
+    widgets['plot_widget'].addLegend()
+    widgets['f_line'] = widgets['plot_widget'].plot(ts, F[0],name='F', pen='b')
+    widgets['fneu_line'] = widgets['plot_widget'].plot(ts, Fneu[0], name='Fneu', pen='r')
+    widgets['spks_line'] = widgets['plot_widget'].plot(ts, spks[0], name='Deconv', pen='w')
+    widgets['dock_widget'] = v.window.add_dock_widget(widgets['plot_widget'],
+                                            name='traces', area='bottom')
+    cell_layer = layers['cvol_layer']
+    not_cell_layer = layers['nvol_layer']
+    
+    def get_traces(cidx):
+        return ts, spks[cidx], F[cidx], Fneu[cidx]
+    def update_plot(widg_dict, label_idx):
+        if label_idx == -1:
+            ts = [0]; ss = [0]; fx = [0]; fn = [0]
+        else:
+            ts, ss, fx, fn = get_traces(label_idx - 1)
+        widg_dict['f_line'].setData(ts, fx)
+        widg_dict['fneu_line'].setData(ts, fn)
+        widg_dict['spks_line'].setData(ts, ss)
+    
+    @cell_layer.mouse_drag_callbacks.append
+    def on_click(layer, event):
+        handle_event(layer,event)
+    @not_cell_layer.mouse_drag_callbacks.append
+    def on_click(layer, event):
+        handle_event(layer,event)
+    def handle_event(layer, event):
+        coords = n.array(layer.world_to_data(event.position)).astype(int)
+        value_c = layers['clabel'][coords[0], coords[1], coords[2]]
+        value_nc = layers['nclabel'][coords[0], coords[1], coords[2]]
+        value = max(value_c, value_nc)
+        if event.button == 1:
+            update_plot(widgets,value-1)
+        elif event.button == 2:
+            if value > 0:
+                iscell_curated[value-1] = 1-iscell_curated[value-1]
+                n.save(iscell_savepath, iscell_curated)
+                print("Updating cell %d" % (value-1))
+                update_vols(outputs['stats'], outputs['vmap'].shape, iscell_curated, 
+                            layers, update_layers=True)
+                
+def update_vols(stats, shape, iscell, layers, cmap='Set3', 
+                lam_max=0.3, scale=(15,4,4), update_layers=True):
+    cell_id_vol, cell_rgb_vol = make_label_vols(stats, shape, iscell=iscell,
+                                               cmap=cmap, lam_max=lam_max)
+    noncell_id_vol, noncell_rgb_vol = make_label_vols(stats, shape, iscell=1-iscell,
+                                                   cmap=cmap, lam_max=lam_max)
+    print("Update vols")
+    print("Update layers", update_layers)
+    if update_layers:
+        print(layers['cvol_layer'])
+        layers['cvol_layer'].data = cell_rgb_vol;layers['cvol_layer'].refresh()
+        layers['nvol_layer'].data = noncell_rgb_vol;layers['nvol_layer'].refresh()
+        layers['clabel'] = cell_id_vol
+        layers['nclabel'] = noncell_id_vol
+
+    return cell_id_vol, noncell_id_vol, cell_rgb_vol, noncell_rgb_vol
+
+
+
+
+
+
+
+
+# OLD STUFF BELOW HERE
+
+
+def load_outputs_old(dir, files = ['stats.npy', 'F.npy', 'Fneu.npy', 'spks.npy', 'info.npy', 'iscell_filtered.npy', 'iscell_extracted.npy', 'iscell.npy', 'vmap.npy', 'im3d.npy', 'vmap_patch.npy'], return_namespace=False, additional_outputs = {}, regen_iscell=False):
     outputs = {'dir' : dir}
     for filename in files:
         if filename in os.listdir(dir):
@@ -100,7 +271,7 @@ def update_iscell(iscell, dir):
 
 
 def create_napari_ui(outputs, lam_thresh=0.3, title='3D Viewer', use_patch_coords=False, scale=(15,4,4), theme='dark', extra_cells=None, extra_cells_names=None, vmap_limits=None,
-                     extra_images = None, extra_images_names = None, cell_label_name='cells', vmap_name='corr map', use_filtered_iscell=True):
+                     extra_images = None, extra_images_names = None, cell_label_name='cells', vmap_name='corr map', use_filtered_iscell=True, v=None):
     if use_patch_coords:
         vmap = outputs['vmap_patch']
     else: 
@@ -115,8 +286,12 @@ def create_napari_ui(outputs, lam_thresh=0.3, title='3D Viewer', use_patch_coord
                                          lam_thresh=lam_thresh, use_patch_coords=use_patch_coords)
     not_cell_labels = make_cell_label_vol(outputs['stats'], 1-iscell, vmap.shape,
                                              lam_thresh=lam_thresh, use_patch_coords=use_patch_coords)
-    v = napari.view_image(
+    if v is None:
+        v = napari.view_image(
         vmap, title=title, name=vmap_name, opacity=1.0, scale=scale, contrast_limits=vmap_limits)
+    else:
+        v.add_image(vmap, title=title, name=vmap_name, opacity=1.0, scale=scale, contrast_limits=vmap_limits)
+
     if extra_images is not None:
         for i, extra_image in enumerate(extra_images):
             v.add_image(

@@ -166,6 +166,7 @@ def detect_cells_worker(worker_idx, roi_idx, patch_par, out, Th2, percentile, ro
 
     default_log("W%02d: Cell %d at with peak %.3f, activity_thresh %.3f, max %0.3f" % (worker_idx, roi_idx+1, peak_val, threshold, tproj.max()), 2)
     active_frames = n.nonzero(tproj > threshold)[0]
+    default_log("W%02d, Cell %d. Thresh: %.3f, Active frames: %d" % (worker_idx, roi_idx + 1, threshold, len(active_frames)))
 
     for i in range(roi_ext_iterations):
         # default_log("%d active frames" % (len(active_frames)), 3)
@@ -175,6 +176,7 @@ def detect_cells_worker(worker_idx, roi_idx, patch_par, out, Th2, percentile, ro
                                         max_ext_iters=max_ext_iters, max_pix = max_pix)
         tproj = patch[:,zz,yy,xx] @ lam
         active_frames = n.nonzero(tproj > threshold)[0]
+        default_log("W%02d, Cell %d. Iter: %d, %d pix. Thresh: %.3f, Active frames: %d" % (worker_idx, roi_idx + 1, i, len(lam), threshold, len(active_frames)))
         npix = len(lam)
     
     sub = n.zeros((patch.shape[0],npix))

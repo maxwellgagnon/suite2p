@@ -13,7 +13,7 @@ def default_log(string, val=None): print(string)
 def block_and_svd(mov_reg, n_comp, block_shape= (1, 128, 128), block_overlaps=(0, 18, 18),
                   t_chunk=4000, pix_chunk= None, n_svd_blocks_per_batch = 36, svd_dir=None,
                   block_validity=None, log_cb=default_log, flip_shape=False, end_batch=None,
-                  start_batch = 0, other_info = {}):
+                  start_batch = 0, run_svd=True, other_info = {}):
     if not flip_shape:
         nz, nt, ny, nx = mov_reg.shape
     elif flip_shape:
@@ -34,7 +34,7 @@ def block_and_svd(mov_reg, n_comp, block_shape= (1, 128, 128), block_overlaps=(0
     os.makedirs(svd_block_dir, exist_ok=True)
     log_cb("Saving SVD blocks in %s" % svd_block_dir)
     svd_info_path = os.path.join(svd_dir, 'svd_info.npy')
-
+    # return
     if start_batch == 0:
         svd_info = {
             'n_blocks': n_blocks,
@@ -50,7 +50,7 @@ def block_and_svd(mov_reg, n_comp, block_shape= (1, 128, 128), block_overlaps=(0
     else:
         print("Loading SVD info from %s" % svd_info_path)
         svd_info = n.load(svd_info_path, allow_pickle=True).item()
-
+    if not run_svd: return svd_info
     batch_idx = start_batch + 1
     print("Starting with batch %d" % start_batch)
     for batch_start in range(start_batch*n_svd_blocks_per_batch, n_blocks, n_svd_blocks_per_batch):

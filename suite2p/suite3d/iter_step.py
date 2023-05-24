@@ -100,6 +100,8 @@ def calculate_corrmap(mov, params, dirs, log_cb = default_log, save=True, return
     max_img = n.zeros((nz,ny,nx))
     sdmov2 = n.zeros((nz,ny,nx))
     n_frames_proc = 0 
+    if iter_limit is not None:
+        log_cb("Running only %d iters" % iter_limit)
     for batch_idx in range(n_batches):
         if iter_limit is not None and batch_idx == iter_limit:
             break
@@ -285,13 +287,31 @@ def fuse_movie(mov, n_skip, centers, shift_xs):
     # print(nxnew)
     mov_fused = n.zeros((nz, nt, ny, nxnew), dtype=mov.dtype)
 
+    print(mov.shape)
+    print(mov_fused.shape)
+    print(centers)
+
     for zidx in range(nz):
         curr_x = 0
         curr_x_new = 0
         for i in range(n_seams):
+            # print("  Seam %d" % i)
             wid = (centers[i] + shift_xs[zidx]) - curr_x
+            # print(wid)
+            # print(curr_x, curr_x_new)
+            # print(mov_fused[zidx, :, :, curr_x_new: curr_x_new + wid - n_skip].shape)
+            # print(wid - n_skip)
+            # print(mov[zidx, :, :, curr_x + n_skip_l: curr_x + wid - n_skip_r].shape)
+            # print(wid - n_skip_r - n_skip_l)
+
+            target_len = mov_fused[zidx, :, :, curr_x_new: curr_x_new + wid - n_skip].shape[-1]
+            source_len = mov[zidx, :, :, curr_x + n_skip_l: curr_x + wid - n_skip_r].shape[-1]
+            source_crop = 0
+            if target_len != source_len:
+                source_crop = target_len - source_len
+                print("\n\n\n\nXXXXXXXXXXXXXXXCropping source by %d" % source_crop)
             mov_fused[zidx, :, :, curr_x_new: curr_x_new + wid - n_skip] = \
-                mov[zidx, :, :, curr_x + n_skip_l: curr_x + wid - n_skip_r]
+                mov[zidx, :, :, curr_x + n_skip_l: curr_x + wid - n_skip_r + source_crop]
             curr_x_new += wid - n_skip
             curr_x += wid
 
@@ -428,6 +448,7 @@ def register_dataset(tifs, params, dirs, summary, log_cb = default_log,
     notch_filt = params['notch_filt']
     do_subtract_crosstalk = params['subtract_crosstalk']
     mov_dtype = params['dtype']
+    split_tif_size = params.get('split_tif_size', None)
 
     batches = init_batches(tifs, tif_batch_size, n_tifs_to_analyze)
     n_batches = len(batches)
@@ -437,7 +458,8 @@ def register_dataset(tifs, params, dirs, summary, log_cb = default_log,
     nz, ny, nx = ref_img_3d.shape
     n_frames_proc = 0
     
-    __, reg_data_paths = init_batch_files(job_iter_dir, job_reg_data_dir, n_batches, makedirs=False, filename='reg_data')
+    # __, reg_data_paths = init_batch_files(job_iter_dir, job_reg_data_dir, n_batches, makedirs=False, filename='reg_data')
+    reg_data_paths = []
     __, offset_paths = init_batch_files(job_iter_dir, job_reg_data_dir, n_batches, makedirs=False, filename='offsets')
 
     loaded_movs = [0]
@@ -453,10 +475,11 @@ def register_dataset(tifs, params, dirs, summary, log_cb = default_log,
     io_thread = threading.Thread(target=io_thread_loader, args=(batches[start_batch_idx], start_batch_idx))
     io_thread.start()
 
+    file_idx = 0
     for batch_idx in range(start_batch_idx, n_batches):
         try:
             log_cb("Start Batch: ", level=3,log_mem_usage=True )
-            reg_data_path = reg_data_paths[batch_idx]
+            # reg_data_path = reg_data_paths[batch_idx]
             offset_path = offset_paths[batch_idx]
             log_cb("Loading Batch %d of %d" % (batch_idx+1, n_batches), 0)
             io_thread.join()
@@ -476,8 +499,15 @@ def register_dataset(tifs, params, dirs, summary, log_cb = default_log,
             log_cb("Before Reg:", level=3,log_mem_usage=True )
             log_cb()
             all_offsets = register_mov(mov,refs_and_masks, all_ops, log_cb)
-            log_cb("Saving registered file to %s" % reg_data_path, 2)
-            n.save(reg_data_path, mov)
+            if split_tif_size is None:
+                split_tif_size = mov.shape[1]
+            for i in range(0, mov.shape[1], split_tif_size):
+                reg_data_path = os.path.join(job_reg_data_dir, 'reg_data%04d.npy' % file_idx)
+                reg_data_paths.append(reg_data_path)
+                end_idx = min(mov.shape[1], i + split_tif_size)
+                log_cb("Saving registered file of shape %s to %s" % (str( mov[:,i:end_idx].shape), reg_data_path), 2)
+                n.save(reg_data_path, mov[:,i:end_idx])
+                file_idx += 1
             n.save(offset_path, all_offsets)
             log_cb("After reg:", level=3,log_mem_usage=True )
 

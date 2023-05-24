@@ -60,9 +60,12 @@ def load_and_stitch_tifs(paths, planes, verbose=True,n_proc=15, mp_args = {}, fi
 
 def load_and_stitch_full_tif_mp(path, channels, n_proc=10, verbose=True,translations=None, filt = None, debug=False, get_roi_start_pix=False):
     tic = time.time()
-
+    n_ch_overwrite=30
     # TODO imread from tifffile has an overhead of ~20-30 seconds before it actually reads the file?
     tiffile = tifffile.imread(path)
+    if len(tiffile.shape) < 4:
+        n_t_ch, n1, n2 = tiffile.shape
+        tiffile = tiffile.reshape(int(n_t_ch/30.0), 30, n1,n2)
   
     rois = get_meso_rois(path)
   
@@ -184,7 +187,7 @@ def get_meso_rois(tif_path, max_roi_width_pix=145):
         roi_dict['sizeXY'] = n.array(scanfield['sizeXY'])
         roi_dict['pixXY'] = n.array(scanfield['pixelResolutionXY'])
         if roi_dict['pixXY'][0] > max_roi_width_pix and not warned:
-            print("SI ROI pix count in x is %d, which is impossible, setting it to %d" % (roi_dict['pixXY'][0],max_roi_width_pix))
+            # print("SI ROI pix count in x is %d, which is impossible, setting it to %d" % (roi_dict['pixXY'][0],max_roi_width_pix))
             warned=True
             roi_dict['pixXY'][0] = max_roi_width_pix
     #         print(scanfield)
