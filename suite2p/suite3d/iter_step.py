@@ -144,7 +144,7 @@ def calculate_corrmap(mov, params, dirs, log_cb = default_log, save=True, return
     if save: n.save(os.path.join(batch_dirs[batch_idx], 'vmap.npy'), vmap)
     if return_mov_filt:
         return mov_filt, vmap
-    return vmap
+    return vmap, mean_img, max_img
 
 
     
@@ -157,7 +157,7 @@ def calculate_corrmap_for_batch(mov, sdmov2, vmap2, mean_img, max_img, temporal_
 
     # shmem_mov_sub, shmem_par_mov_sub, mov_sub = utils.create_shmem_from_arr(mov, copy=True)
     # del mov
-    mov = det_utils.hp_rolling_mean_filter(mov, temporal_hpf, copy=False)
+    mov = det_utils.hp_rolling_mean_filter(mov, int(temporal_hpf), copy=False)
     # det3d.hp_rolling_mean_filter_mp(
         # shmem_par_mov_sub, temporal_hpf, nz=nz, n_proc=n_proc)
     # print(mov_sub.std())
@@ -287,9 +287,9 @@ def fuse_movie(mov, n_skip, centers, shift_xs):
     # print(nxnew)
     mov_fused = n.zeros((nz, nt, ny, nxnew), dtype=mov.dtype)
 
-    print(mov.shape)
-    print(mov_fused.shape)
-    print(centers)
+    # print(mov.shape)
+    # print(mov_fused.shape)
+    # print(centers)
 
     for zidx in range(nz):
         curr_x = 0
@@ -309,7 +309,8 @@ def fuse_movie(mov, n_skip, centers, shift_xs):
             source_crop = 0
             if target_len != source_len:
                 source_crop = target_len - source_len
-                print("\n\n\n\nXXXXXXXXXXXXXXXCropping source by %d" % source_crop)
+                # print("\n\n\n\nXXXXXXXXXXXXXXXCropping source by %d" % source_crop)
+            # print(target_len, source_len, source_crop)
             mov_fused[zidx, :, :, curr_x_new: curr_x_new + wid - n_skip] = \
                 mov[zidx, :, :, curr_x + n_skip_l: curr_x + wid - n_skip_r + source_crop]
             curr_x_new += wid - n_skip
@@ -318,7 +319,7 @@ def fuse_movie(mov, n_skip, centers, shift_xs):
     return mov_fused
 
 
-def fuse_and_save_reg_file(reg_file, reg_fused_dir, centers, shift_xs, n_skip, crops=None, mov=None, save=True, delete_original=False):
+def fuse_and_save_reg_file(reg_file, reg_fused_dir, centers, shift_xs, n_skip, crop=None, mov=None, save=True, delete_original=False):
     file_name = reg_file.split(os.sep)[-1]
     fused_file_name = os.path.join(reg_fused_dir, 'fused_' + file_name)
     if mov is None: 
@@ -326,10 +327,13 @@ def fuse_and_save_reg_file(reg_file, reg_fused_dir, centers, shift_xs, n_skip, c
         mov = n.load(reg_file)
         print("Loaded")
 
+    if crop is not None:
+        cz, cy, cx = crop
+        mov = mov[cz[0]:cz[1], cy[0]:cy[1], cx[0]:cx[1]]
     mov_fused = fuse_movie(mov, n_skip, centers, shift_xs)
     
-    if crops is not None:
-        mov_fused = mov_fused[crops[0][0]:crops[0][1], :, crops[1][0]:crops[1][1], crops[2][0]:crops[2][1]]
+    # if crops is not None:
+        # mov_fused = mov_fused[crops[0][0]:crops[0][1], :, crops[1][0]:crops[1][1], crops[2][0]:crops[2][1]]
     if delete_original:
         print("Delelting file: %s" % reg_file)
         os.remove(reg_file)
@@ -440,6 +444,7 @@ def register_dataset(tifs, params, dirs, summary, log_cb = default_log,
     crosstalk_coeff = summary['crosstalk_coeff']
     refs_and_masks = summary.get('refs_and_masks', None)
     all_ops = summary.get('all_ops',None)
+    min_pix_vals = summary['min_pix_vals']
     job_iter_dir = dirs['iters']
     job_reg_data_dir = dirs['registered_data']
     n_tifs_to_analyze = params.get('total_tifs_to_analyze', len(tifs))
@@ -447,12 +452,14 @@ def register_dataset(tifs, params, dirs, summary, log_cb = default_log,
     planes = params['planes']
     notch_filt = params['notch_filt']
     do_subtract_crosstalk = params['subtract_crosstalk']
+    enforce_positivity = params.get('enforce_positivity', False)
     mov_dtype = params['dtype']
     split_tif_size = params.get('split_tif_size', None)
 
     batches = init_batches(tifs, tif_batch_size, n_tifs_to_analyze)
     n_batches = len(batches)
     log_cb("Will analyze %d tifs in %d batches" % (len(n.concatenate(batches)), len(batches)),0)
+    if enforce_positivity: log_cb("Enforcing positivity", 1)
 
     # init accumulators
     nz, ny, nx = ref_img_3d.shape
@@ -485,6 +492,12 @@ def register_dataset(tifs, params, dirs, summary, log_cb = default_log,
             io_thread.join()
             log_cb("Batch %d IO thread joined" % (batch_idx))
             log_cb('After IO thread join', level=3,log_mem_usage=True )
+            if enforce_positivity:
+                print(loaded_movs[0].shape)
+                print(min_pix_vals.shape)
+                log_cb("Subtracting min vals to enfore positivity", 1)
+                loaded_movs[0] -= min_pix_vals.reshape(len(min_pix_vals), 1, 1, 1)
+                print(loaded_movs[0].shape)
             shmem_mov,shmem_mov_params, mov = utils.create_shmem_from_arr(loaded_movs[0], copy=True)
             log_cb("After Sharr creation:", level=3,log_mem_usage=True )
             if batch_idx + 1 < n_batches:

@@ -55,13 +55,17 @@ def sum_log_lik_one_line(m, x, y, b = 0, sigma_0 = 10,  c = 1e-10, m_penalty=0):
 
 def calculate_crosstalk_coeff(im3d, exclude_below=1, sigma=0.01, peak_width=1,     
                             verbose=True, estimate_gamma=True, estimate_from_last_n_planes=None,
-                            n_proc = 1, show_plots=True, save_plots = None):
-    m_penalty = 0.00
+                            n_proc = 1, show_plots=True, save_plots = None, force_positive=True,
+                            m_penalty = 0, bounds=None, fit_above_percentile=0):
+    plt.style.use('seaborn')
     m_opts = [] 
     m_firsts = []
     all_liks = []
     m_opt_liks = []
     m_first_liks = []
+    im3d = im3d.copy()
+    if force_positive:
+        im3d = im3d - im3d.min(axis=(1,2),keepdims=True)
 
     ms = n.linspace(0,1,101)
     assert im3d.shape[0] == 30
@@ -74,11 +78,22 @@ def calculate_crosstalk_coeff(im3d, exclude_below=1, sigma=0.01, peak_width=1,
         os.makedirs(plot_dir, exist_ok=True)
 
     fs = []
+    n_plots = estimate_from_last_n_planes
+    n_cols = 5
+    n_rows = n.ceil(n_plots / n_cols).astype(int)
 
-    for i in range(15 - estimate_from_last_n_planes, 15):
+    # print(n_plots, n_rows, n_cols)
+    # print(estimate_from_last_n_planes)
+    f,axs = plt.subplots(n_rows, n_cols, figsize=(n_cols*2, n_rows*2))
+    if n_rows == 1: axs = [axs]
+
+    for idx, i in enumerate(range(15 - estimate_from_last_n_planes, 15)):
         X = im3d[i].flatten()
         Y = im3d[i+15].flatten()
-        idxs = X > exclude_below
+        fit_thresh = n.percentile(X, fit_above_percentile)
+        # print(fit_thresh)
+        idxs = X > n.percentile(X, fit_above_percentile)
+        # print(len(idxs), X.shape)
 
         if n_proc == 1:
             liks = n.array([sum_log_lik_one_line(m, X[idxs], Y[idxs], sigma_0 = sigma, m_penalty=m_penalty) for m in ms])
@@ -101,23 +116,30 @@ def calculate_crosstalk_coeff(im3d, exclude_below=1, sigma=0.01, peak_width=1,
             print("Plane %d and %d, m_opt: %.2f and m_first: %.2f" % (i, i+15, m_opt, m_first))
         
         if True:
-            x0, x1 = -5, 300
-            y0, y1 = -5, 200
-            bins = [n.arange(x0,x1,1),n.arange(y0,y1,1)]
-            f, ax = plt.subplots(1,1,figsize=(10,10))
-            plt.gca().set_aspect('equal')
-            plt.hist2d(X, Y, bins = bins, norm=colors.LogNorm());
-            plt.plot(bins[0], m_opt * bins[0])
-            plt.plot(bins[0], m_first * bins[0])
+            if bounds is None: 
+                bounds = (0, n.percentile(X,99.95))
+            bins = [n.arange(*bounds,1),n.arange(*bounds,1)]
+            col_id = idx % n_cols
+            row_id = idx // n_cols
+            # print(i,idx, col_id, row_id)
+            ax = axs[row_id][col_id]
+            ax.set_aspect('equal')
+            ax.hist2d(X, Y, bins = bins, norm=colors.LogNorm());
+            ax.plot(bins[0], m_opt * bins[0])
+            ax.plot(bins[0], m_first * bins[0])
             axsins2 = inset_axes(ax, width="30%", height="40%", loc='upper right')
             axsins2.grid(False)
             axsins2.plot(ms, liks, label='Min: %.2f, 1st: %.2f' % (m_opt, m_first))
-            axsins2.set_xlabel("m")
-            axsins2.set_ylabel("Log Lik")
-            if show_plots: plt.show()
-            if save_plots is not None:
-                plt.savefig(os.path.join(plot_dir, 'plane_fit_%02d.png' % i))
-            plt.close()
+            # axsins2.set_xlabel("m")
+            axsins2.set_xticks([m_opt], rotation=0)
+            axsins2.set_yticks([])
+            ax.set_xlabel("Plane %d" % i)
+            ax.set_ylabel("Plane %d" % (i+15))
+    plt.tight_layout()
+    if show_plots: plt.show()
+    if save_plots is not None:
+        plt.savefig(os.path.join(plot_dir, 'plane_fits.png'))
+    plt.close()
 
     m_opts = n.array(m_opts)
     m_firsts = n.array(m_firsts)
@@ -130,14 +152,16 @@ def calculate_crosstalk_coeff(im3d, exclude_below=1, sigma=0.01, peak_width=1,
         x = n.linspace(0,1,1001)
         gs = gamma.pdf(x, *gx)
         if True:
-            f = plt.figure(figsize=(8,6), dpi=150)
-            plt.hist(m_opts,density=True, log=False)
+            f = plt.figure(figsize=(3,3))
+            plt.hist(m_opts,density=True, log=False, bins = n.arange(0,1.01, 0.01))
             plt.plot(x,gs)
+            plt.yticks([])
             plt.scatter([x[n.argmax(gs)]], [n.max(gs)], label='Best coeff: %.3f' % x[n.argmax(gs)])
             plt.legend()
             plt.xlabel("Coeff value")
-            plt.ylabel("# planes")
-            plt.title("Histogram of calculated coefficients for each plane")
+            plt.ylabel("")
+            plt.xlim(0,0.4)
+            plt.title("Histogram of est. coefficients per plane")
             if show_plots: plt.show()
             if save_plots is not None:
                 plt.savefig(os.path.join(plot_dir, 'gamma_fit.png'))

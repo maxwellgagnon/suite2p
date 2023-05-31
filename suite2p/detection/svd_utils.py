@@ -107,9 +107,12 @@ def block_and_svd(mov_reg, n_comp, block_shape= (1, 128, 128), block_overlaps=(0
         batch_idx += 1
     return svd_info
 
+import time
 
 def reconstruct_overlapping_movie(svd_info, t_indices, filt_size = None, block_chunks=1, normalize=True, n_comps = None, crop_z = None):
     
+    # print("RECONSTRUCT START")
+    tic = time.time()
     ntx = t_indices[1] - t_indices[0]
     t_batch_size = ntx
     all_blocks = reconstruct_movie(svd_info, t_batch_size = t_batch_size, return_blocks=True, block_chunks=block_chunks, n_comps = n_comps)
@@ -139,6 +142,7 @@ def reconstruct_overlapping_movie(svd_info, t_indices, filt_size = None, block_c
     mask = ndimage.uniform_filter(mask, (noz//fsize, noy//fsize,nox//fsize))
 
     all_blocks_batch = all_blocks[:, t_indices[0]:t_indices[1]].compute()
+    # print("RECONSTRUCT - DASK COMPLETE at t %.2f" % (time.time()-tic))
     for i in range(n_blocks):
         zz,yy,xx = block_limits[:,i]
         block = all_blocks_batch[i].reshape(
@@ -147,8 +151,11 @@ def reconstruct_overlapping_movie(svd_info, t_indices, filt_size = None, block_c
         norm3d[zz[0]:zz[1], yy[0]:yy[1], xx[0]:xx[1]] += mask
     if normalize:
         norm3d[norm3d < 1e-5] = n.inf
+        # print("RECONSTRUCT - ALL COMPLETE at t %.2f" % (time.time()-tic))
         return mov3d / norm3d
-    else: return mov3d, norm3d
+    else: 
+        # print("RECONSTRUCT - ALL COMPLETE at t %.2f" % (time.time()-tic))
+        return mov3d, norm3d
 
 def reconstruct_movie(svd_info, t_batch_size=None, return_blocks=False, block_chunks=1, n_comps=None, old_func=False):
     if type(svd_info) == str:

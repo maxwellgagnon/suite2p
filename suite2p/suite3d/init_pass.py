@@ -2,6 +2,7 @@ import os
 import numpy as n
 import copy
 
+import matplotlib.pyplot as plt
 from ..io import lbm as lbmio 
 from ..registration import register
 from . import utils
@@ -51,7 +52,7 @@ def prep_registration(full_mov, reg_ops, log_callback=default_log, filter_pcorr=
     if force_plane_shifts is None:
         tvecs = n.concatenate([[[0,0]], utils.get_shifts_3d(ref_img_3d, filter_pcorr=filter_pcorr)])
     else: tvecs = force_plane_shifts
-    log_callback("Tvecs: %s" % str(tvecs), 2)
+    log_callback("Tvecs: %s" % str(tvecs), 5)
 
     ref_img_3d_aligned = utils.register_movie(ref_img_3d[:,n.newaxis], tvecs=tvecs)[:,0]
 
@@ -99,20 +100,40 @@ def run_init_pass(job):
 
     init_tifs = choose_init_tifs(tifs, params['n_init_files'], params['init_file_pool'], 
                                        params['init_file_sample_method'])
-    init_mov = load_init_tifs(init_tifs, params['planes'], params['notch_filt'])
+    init_mov = load_init_tifs(
+        init_tifs, params['planes'], params['notch_filt'])
     nz, nt, ny, nx = init_mov.shape
+    if params['init_n_frames'] is not None:
+        assert nt > params['init_n_frames'], 'not enough frames in loaded tifs'
+        subset_ts = n.random.choice(n.arange(nt), params['init_n_frames'],replace=False)
+        job.log("Selecting %d random frames from the init tif files" % params['init_n_frames'])
+        init_mov = init_mov[:,subset_ts]
+    nz, nt, ny, nx = init_mov.shape
+    job.log("Loaded movie with %d frames and shape %d, %d, %d" % (nt, nz, ny, nx))
     im3d = init_mov.mean(axis=1)
-
+    im3d_raw = im3d.copy()
+    if job.params.get('enforce_positivity', False):
+        # min_pix_vals = init_mov.min(axis=(1, 2, 3), keepdims=True)[:,0].astype(int)
+        # min_pix_vals = n.percentile(init_mov.reshape(nz, -1), 1, axis=1).astype(int)
+        min_pix_vals = im3d.min(axis=(1,2), keepdims=False).astype(int)
+        job.log("Enforcing positivity in mean image",3)
+        init_mov -= min_pix_vals[:, n.newaxis, n.newaxis, n.newaxis]
+        
+        job.log("Min pix vals: %s" % str(min_pix_vals.flatten()), 3)
+    else: min_pix_vals = None
     if params['subtract_crosstalk']:
         if params['override_crosstalk'] is not None:
             cross_coeff = params['override_crosstalk']
             job.log("Subtracting crosstalk with forced coefficient %0.3f" % cross_coeff)
         else:
             __, __, cross_coeff = utils.calculate_crosstalk_coeff(im3d,
-                                                    estimate_from_last_n_planes=params['n_planes_for_crosstalk_est'],
-                                                    show_plots=False, save_plots=params['job_summary_dir'],
+                                                    estimate_from_last_n_planes=params['crosstalk_n_planes'],
+                                                    sigma=params['crosstalk_sigma'], fit_above_percentile = params['crosstalk_percentile'],
+                                                    show_plots=True, save_plots=job.dirs['summary'],
                                                     verbose=(job.verbosity == 2))
             job.log("Subtracting with estimated coefficient %0.3f" % cross_coeff)
+            if cross_coeff > 0.4 or cross_coeff < 0.01:
+                job.log("WARNING - seems like coefficient esimation failed!")
         for plane in params['planes']:
             if plane > 14 and plane - 15 in params['planes']:
                 plane_idx = n.where(n.array(params['planes']) == plane)[0][0]
@@ -120,13 +141,14 @@ def run_init_pass(job):
                 
                 job.log("    Subtracting plane %d from %d" % (plane-15, plane), 2)
                 job.log("        Corresponds to index %d from %d" % (sub_plane_idx, plane_idx))
-
                 init_mov[plane_idx] = init_mov[plane_idx] - init_mov[sub_plane_idx] * cross_coeff
+        im3d = init_mov.mean(axis=1)
     else:
         job.log("No crosstalk estimation or subtraction")
         cross_coeff = None
 
     job.log("Building ops file")
+    # return
     reg_ops = utils.build_ops('', {}, {'smooth_sigma' : job.params['smooth_sigma'],
                                         'maxregshift' : job.params['maxregshift'],
                                         'Ly' : ny, 'Lx' : nx,
@@ -138,12 +160,15 @@ def run_init_pass(job):
     summary = {
         'ref_img_3d' : ref_img_3d,
         'ref_img_3d_unaligned' : ref_img_3d_unaligned,
+        'raw_img' : im3d_raw,
+        'img' : im3d,
         'crosstalk_coeff' : cross_coeff,
         'plane_shifts' : tvecs,
         'refs_and_masks' : all_refs_masks,
         'all_ops' : all_ops,
         'plane_mean' : init_mov.mean(axis=(1,2,3)),
         'plane_std' : init_mov.std(axis=(1,2,3)),
+        'min_pix_vals' : min_pix_vals,
     }
     summary_path = os.path.join(job.dirs['summary'], 'summary.npy')
     job.log("Saving summary to %s" % summary_path)

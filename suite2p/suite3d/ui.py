@@ -14,14 +14,14 @@ except:
 try: from napari._qt.widgets.qt_range_slider_popup import QRangeSliderPopup
 except: pass
 
-def load_outputs(output_dir, load_traces = False):
+def load_outputs(output_dir, load_traces = False, trace_names = ['F', 'Fneu','spks']):
     files = os.listdir(output_dir)
     outputs = {}
     outputs['dir'] = output_dir
     info = n.load(os.path.join(output_dir, 'info.npy'),allow_pickle=True).item()
     outputs['vmap'] = info['vmap']
-    outputs['max_img'] = info['max_img']
-    outputs['mean_img'] = info['mean_img']
+    outputs['max_img'] = info.get('max_img', n.zeros_like(outputs['vmap']))
+    outputs['mean_img'] = info.get('mean_img', n.zeros_like(outputs['vmap']))
     outputs['fs'] = info['all_params']['fs']
     outputs['stats'] = n.load(os.path.join(output_dir, 'stats.npy'),allow_pickle=True)
 
@@ -32,7 +32,7 @@ def load_outputs(output_dir, load_traces = False):
 
     if load_traces:
         traces = {}
-        for filename in ['F','Fneu','spks','iscell_extracted']:
+        for filename in (trace_names + ['iscell_extracted']):
             if filename + '.npy' in files:
                 traces[filename] = n.load(os.path.join(output_dir, filename + '.npy'))
             else: print("Not found: %s.npy" % filename)
@@ -41,10 +41,10 @@ def load_outputs(output_dir, load_traces = False):
     return outputs
 
 
-def get_percentiles(image, pmin=1, pmax=99):
+def get_percentiles(image, pmin=1, pmax=99, eps = 0.0001):
     im_f = image.flatten()
     vmin = n.percentile(im_f, pmin)
-    vmax = n.percentile(im_f, pmax)
+    vmax = n.percentile(im_f, pmax) + eps
     return vmin, vmax
 
 def make_label_vols(stats, shape, lam_max = 0.3, iscell=None, cmap='Set3'):
@@ -99,7 +99,7 @@ def create_ui(outputs, cmap='Set3', lam_max = 0.3, scale=(15,4,4)):
     return v, layers
 
 import datetime
-def add_callbacks_to_ui(v, layers, outputs, savedir):
+def add_callbacks_to_ui(v, layers, outputs, savedir, add_sliders = True, filters=None):
     spks = outputs['spks']; F = outputs['F']; Fneu = outputs['Fneu']
     iscell = outputs['iscell_extracted']
     if len(iscell.shape) < 2: iscell = iscell[:,n.newaxis]
@@ -112,6 +112,7 @@ def add_callbacks_to_ui(v, layers, outputs, savedir):
         n.save(backup_path, iscell_curated)
     else:
         iscell_curated = iscell.copy()
+    n.save(iscell_savepath, iscell_curated)
     
     n_roi, nt = spks.shape
     ts = n.arange(nt) / outputs['fs']
@@ -126,6 +127,13 @@ def add_callbacks_to_ui(v, layers, outputs, savedir):
     cell_layer = layers['cvol_layer']
     not_cell_layer = layers['nvol_layer']
     
+
+    if add_sliders:
+        iscell_slider_path = os.path.join(savedir, 'iscell_curated_slider.npy')
+        n.save(iscell_slider_path, iscell_curated)
+        add_curation_sliders(v, iscell_savepath, outputs, layers,
+                             iscell_save_path=iscell_slider_path, filters=filters,)
+
     def get_traces(cidx):
         return ts, spks[cidx], F[cidx], Fneu[cidx]
     def update_plot(widg_dict, label_idx):
@@ -176,8 +184,67 @@ def update_vols(stats, shape, iscell, layers, cmap='Set3',
     return cell_id_vol, noncell_id_vol, cell_rgb_vol, noncell_rgb_vol
 
 
+def add_curation_sliders(v, iscell_path, outputs, layers, iscell_save_path = None,filters = None,):
+    if filters is None: 
+        peak_vals = [stat['peak_val'] for stat in outputs['stats']]
+        filters = [('vmap_peak', (n.min(peak_vals),n.percentile(peak_vals, 80)), 'peak_val', lambda x : x),
+                   ('npix', (0,100), 'lam', lambda x : len(x))]
+        print(filters[0])
+
+    # iscell = n.load(iscell_path)
+    if iscell_save_path is None: 
+        iscell_save_path = iscell_path
+
+    ranges = [filt[1] for filt in filters]
+    sliders, values = add_filters(v, filters, outputs)
+    for slider in sliders:
+     slider.slider.sliderReleased.connect(lambda x=0 : slider_callback(v, sliders, 
+                ranges, iscell_path, iscell_save_path, values, outputs, layers))
+    return sliders, values
+
+def slider_callback(v, sliders, ranges, iscell_path, iscell_save_path, values, outputs, layers):
+    iscell = n.load(iscell_path)
+    iscell_out = iscell.copy()
+    for i,slider in enumerate(sliders):
+        rng = list(slider.slider.value())
+        if rng[0] == ranges[i][0]: rng[0] = values[i].min()
+        if rng[1] == ranges[i][1]: rng[1] = values[i].max()
+        valid = get_valid_cells(values[i], rng)
+        iscell_out[:,0] = n.logical_and(iscell_out[:,0], valid)
+    n.save(iscell_save_path, iscell_out)
+    print("%d cells valid" % iscell_out[:,0].sum())
+    update_vols(outputs['stats'], outputs['vmap'].shape, iscell_out, 
+                layers, update_layers=True)
+
+def add_slider(v, name, srange=(0, 1), callback=None):
+    slider = QRangeSliderPopup()
+    slider.slider.setRange(*srange)
+    slider.slider.setSingleStep(0.1)
+    slider.slider.setValue(srange)
+    slider.slider._slider.sliderReleased.connect(
+        slider.slider.sliderReleased.emit)
+    if callback is not None:
+        slider.slider.sliderReleased.connect(callback)
+    widget = v.window.add_dock_widget(slider, name=name,
+                                      area='left', add_vertical_stretch=False)
+    return widget, slider
 
 
+def add_filters(v, filters, outputs, callback=None):
+    sliders = []
+    all_values = []
+    for filt in filters:
+        values = n.array([filt[3](stat[filt[2]]) for stat in outputs['stats']])
+        widget, slider = add_slider(
+            v, filt[0], srange=filt[1], callback=callback)
+        sliders.append(slider)
+        all_values.append(values)
+    return sliders, all_values
+
+
+def get_valid_cells(prop, limits):
+    good_cells = n.logical_and(prop > limits[0], prop < limits[1])
+    return good_cells
 
 
 
@@ -380,67 +447,9 @@ def create_napari_ui(outputs, lam_thresh=0.3, title='3D Viewer', use_patch_coord
 
     return v
 
-def make_ui_interactive(v, outputs, filters):
-    iscell_manual = outputs['iscell'][:,0]
-    stats = outputs['stats']
-    shape = outputs['vmap'].shape
-    iscell_filt_dir = os.path.join(outputs['dir'], 'iscell_filtered.npy')
-    print("Saving filtered cells to %s" % iscell_filt_dir)
-
-    ranges = [filt[1] for filt in filters]
-    sliders, values = add_filters(v, filters, outputs)
-    for slider in sliders:
-     slider.slider.sliderReleased.connect(lambda x=0 : update_cells(v, sliders, 
-                ranges, iscell_manual, iscell_filt_dir, stats, shape, values))
-    return sliders, values
 
 
-def update_cells(v, sliders, ranges, iscell_manual, iscell_filt_dir, stats, shape, values):
-        iscell = iscell_manual.copy()
-        print('Total: %d cells' % iscell.sum())
-        for i,slider in enumerate(sliders):
-            rng = list(slider.slider.value())
-            if rng[0] == ranges[i][0]: rng[0] = values[i].min()
-            if rng[1] == ranges[i][1]: rng[1] = values[i].max()
-            valid = get_valid_cells(values[i], rng)
-            iscell = n.logical_and(iscell, valid)
-            
-        print("%d cells valid" % iscell.sum())
-        v.layers['cells'].data = make_cell_label_vol(stats, iscell, shape,
-                            lam_thresh=0.3, use_patch_coords=False)
-        v.layers['not-cells'].data = make_cell_label_vol(stats, 1-iscell, shape,
-                            lam_thresh=0.3, use_patch_coords=False)
-        v.layers['cells'].refresh()
-        v.layers['not-cells'].refresh()
-        print("Updated layer data")
-        n.save(iscell_filt_dir, iscell)
-        print("Saved iscell")
 
-def add_slider(v, name, srange=(0,1), callback=None):
-    slider = QRangeSliderPopup()
-    slider.slider.setRange(*srange)
-    slider.slider.setSingleStep(0.1)
-    slider.slider.setValue(srange)
-    slider.slider._slider.sliderReleased.connect(slider.slider.sliderReleased.emit)
-    if callback is not None:
-        slider.slider.sliderReleased.connect(callback)
-    widget = v.window.add_dock_widget(slider, name=name, 
-                                             area='left', add_vertical_stretch=False)
-    return widget,slider
-
-def add_filters(v, filters, outputs, callback=None):
-    sliders = []
-    all_values = []
-    for filt in filters:
-        values = n.array([filt[3](stat[filt[2]]) for stat in outputs['stats']])
-        widget, slider = add_slider(v, filt[0], srange=filt[1], callback=callback)
-        sliders.append(slider)
-        all_values.append(values)
-    return sliders, all_values
-
-def get_valid_cells(prop, limits):
-    good_cells = n.logical_and(prop > limits[0], prop < limits[1])
-    return good_cells
 
 
 def mark_cell(cell_idx, mark_as, iscell=None, napari_cell_layer=None, napari_not_cell_layer=None, refresh=True):

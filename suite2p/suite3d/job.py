@@ -7,6 +7,7 @@ import datetime
 import os
 import copy
 import numpy as n
+import itertools
 from . import init_pass
 from . import utils as u3d 
 try: 
@@ -16,12 +17,13 @@ from suite2p.io import lbm as lbmio
 from multiprocessing import Pool
 from suite2p.suite3d.iter_step import register_dataset, fuse_and_save_reg_file, calculate_corrmap
 from suite2p.suite3d import extension as ext
+from suite2p.suite3d.default_params import get_default_params
 from suite2p.extraction import dcnv
 from suite2p.detection import svd_utils as svu
 from . import ui
 
 class Job:
-    def __init__(self, root_dir, job_id, params=None, tifs=None, exist_ok=False, verbosity=10, create=True):
+    def __init__(self, root_dir, job_id, params=None, tifs=None, overwrite=False, verbosity=10, create=True):
         """Create a Job object that is a wrapper to manage files, current state, log etc.
 
         Args:
@@ -29,23 +31,32 @@ class Job:
             job_id (str): Unique name for the job directory
             params (dict): Job parameters (see examples)
             tifs (list) : list of full paths to tif files to be used
-            exist_ok (bool, optional): If False, will throw error if job_dir exists. Defaults to False.
+            overwrite (bool, optional): If False, will throw error if job_dir exists. Defaults to False.
             verbosity (int, optional): Verbosity level. 0: critical only, 1: info, 2: debug. Defaults to 1.
         """
 
         self.verbosity = verbosity
         self.job_id = job_id
-        if create:
-            self.params = params
+
+
+        if create:   
+            self.init_job_dir(root_dir, job_id, exist_ok=overwrite)
+            def_params = get_default_params()
+            self.log("Loading default params")
+            for k,v in params.items():
+                assert k in def_params.keys(), "%s not a valid parameter" % k
+                self.log("Updating param %s" % (str(k)), 2)
+                def_params[k] = v
+            self.params = def_params
+            assert tifs is not None, 'Must provide tiff files'
             self.params['tifs'] = tifs
             self.tifs = tifs
-            self.init_job_dir(root_dir, job_id, exist_ok=exist_ok)
+            self.save_params()
         else:
-            self.init_job_dir(root_dir, job_id, exist_ok=True, update_params=False)
+            self.job_dir = os.path.join(root_dir,'s3d-%s' % job_id)
+            self.load_dirs()
             self.load_params()
             self.tifs = self.params.get('tifs', [])
-            
-        self.save_params()
 
 
     def log(self, string='', level=1, logfile=True, log_mem_usage=False):
@@ -75,16 +86,20 @@ class Job:
                 header = '\n[%s][%02d] ' % (datetime_string, level)
                 f.write(header + '   ' * level + string)
 
-    def save_params(self, new_params=None, dir = 'job_dir', params=None):
+    def save_params(self, new_params=None, copy_dir = None, params=None, update_main_params=True):
         """Update saved params in job_dir/params.npy
         """
         if params is None:
             params = self.params
-        params_path = os.path.join(self.dirs[dir], 'params.npy')
         if new_params is not None:
             params.update(new_params)
-        n.save(params_path, params)
-        self.log("Updated params file: %s" % params_path)
+        if copy_dir is not None:
+            params_path = os.path.join(self.dirs[copy_dir], 'params.npy')
+            n.save(params_path, params)
+            self.log("Saved a copy of params at %s" % self.dirs[copy_dir])
+        if update_main_params:
+            n.save(os.path.join(self.dirs['job_dir'], 'params.npy'), params)
+        self.log("Updated main params file")
 
     def load_params(self, dir = None):
         if dir is None:
@@ -130,6 +145,9 @@ class Job:
         if dirs is None: dirs = self.dirs
         n.save(os.path.join(self.job_dir, '%s.npy' % name), dirs)
 
+    def load_dirs(self):
+        self.dirs = n.load(os.path.join(self.job_dir , 'dirs.npy'),allow_pickle=True).item()
+
     def update_root_path(self, new_root):
         old_dirs = copy.deepcopy(self.dirs)
         root_len = self.dirs['summary'].find('s3d-' + self.job_id)
@@ -158,7 +176,7 @@ class Job:
         n.save(os.path.join(self.job_dir, 'dirs.npy'), self.dirs)
         return dir_path
 
-    def init_job_dir(self, root_dir, job_id, exist_ok=False, update_params=True):
+    def init_job_dir(self, root_dir, job_id, exist_ok=False):
         """Create a job directory and nested dirs
 
         Args:
@@ -171,7 +189,7 @@ class Job:
         self.job_dir = job_dir
         if os.path.isdir(job_dir):
             self.log("Job directory %s already exists" % job_dir, 0)
-            assert exist_ok, "Manually delete job_dir, or set exist_ok=True"
+            assert exist_ok, "Set create=False to load existing job, or set overwrite=True to overwrite existing job"
         else:
             os.makedirs(job_dir, exist_ok=True)
 
@@ -203,6 +221,7 @@ class Job:
         n.save(os.path.join(job_dir, 'dirs.npy'), self.dirs)
 
     def run_init_pass(self):
+        self.save_params(copy_dir='summary')
         self.log("Launching initial pass", 0)
         init_pass.run_init_pass(self)
     def copy_init_pass(self,summary_old_job):
@@ -212,7 +231,7 @@ class Job:
     def register(self, tifs=None, start_batch_idx = 0, params=None, summary=None):
         if params is None:
             params = self.params
-        self.save_params(params=params, dir='registered_data')
+        self.save_params(params=params, copy_dir='registered_data')
         if summary is None:
             summary = self.load_summary()
         n.save(os.path.join(self.dirs['registered_data'], 'summary.npy'), summary)
@@ -220,8 +239,11 @@ class Job:
             tifs = self.tifs
         register_dataset(tifs, params, self.dirs, summary, self.log, start_batch_idx = start_batch_idx)
 
-    def calculate_corr_map(self, mov=None, save=True, return_mov_filt=False, crop=None, svd_info=None, iter_limit=None, parent_dir = None):
-        self.save_params()
+
+
+
+    def calculate_corr_map(self, mov=None, save=True, return_mov_filt=False, crop=None, svd_info=None, iter_limit=None, parent_dir = None, update_main_params=True):
+        self.save_params(copy_dir=parent_dir, update_main_params=update_main_params)
         mov_sub_dir_tag = 'mov_sub'
         iter_dir_tag = 'iters'
         if parent_dir is not None: 
@@ -238,7 +260,7 @@ class Job:
         if crop is not None and svd_info is None:
             assert svd_info is None, 'cant crop with svd - easy fix'
             self.params['detection_crop'] = crop
-            self.save_params(dir='mov_sub')
+            self.save_params(copy_dir='mov_sub', update_main_params=False)
             mov = mov[crop[0][0]:crop[0][1], :, crop[1][0]:crop[1][1], crop[2][0]:crop[2][1]]
             self.log("Cropped movie to shape: %s" % str(mov.shape))
         return calculate_corrmap(mov, self.params, self.dirs, self.log, return_mov_filt=return_mov_filt, save=save,
@@ -246,7 +268,7 @@ class Job:
 
     def patch_and_detect(self, corrmap_dir_tag='', do_patch_idxs=None, compute_npil_masks=True, ts=(), combined_name='combined'):
         mov_sub = self.get_registered_movie(corrmap_dir_tag + '-mov_sub', 'mov', axis=0)
-        vmap = self.load_iter_results(-1, dir_tag=corrmap_dir_tag + '-iters')['vmap']
+        vmap = self.load_iter_results(-1, dir_tag=corrmap_dir_tag + '-iters')['vmap2'] ** 0.5
         patch_size_xy = self.params['patch_size_xy']
         patch_overlap_xy = self.params['patch_overlap_xy']
         nt,nz,ny,nx = mov_sub.shape
@@ -553,8 +575,11 @@ class Job:
             reg_fused_dir = ''
         if save:
             self.log("Saving to %s" % reg_fused_dir)
-            self.save_params(dir='registered_fused_data')
+            self.save_params(copy_dir='registered_fused_data')
 
+        crop = self.params.get("fuse_crop", None)
+        if crop is not None:
+            self.log("Cropping: %s" % str(crop))
         # if you get an assertion error here with save=False in _get_more_data, assert left > 0
         # congratulations, you have run into a bug in Python itself! 
         # https://bugs.python.org/issue34563, https://stackoverflow.com/questions/47692566/
@@ -562,7 +587,7 @@ class Job:
         if n_proc > 1:
             with Pool(n_proc) as p:
                 fused_files = p.starmap(fuse_and_save_reg_file, [(
-                    file, reg_fused_dir, centers,  shift_xs, n_skip, None, None, save, delete_original) for file in files])
+                    file, reg_fused_dir, centers,  shift_xs, n_skip, crop, None, save, delete_original) for file in files])
         else:
             self.log("Single processor")
             fused_files = [fuse_and_save_reg_file(file, reg_fused_dir, centers,  shift_xs, n_skip, None, None, save, delete_original) for file in files]
@@ -573,7 +598,7 @@ class Job:
 
     def svd_decompose_movie(self, svd_dir_tag, run_svd=True):
         svd_dir = self.dirs[svd_dir_tag]
-        self.save_params(dir=svd_dir_tag)
+        self.save_params(copy_dir=svd_dir_tag)
         mov = self.get_registered_movie('registered_fused_data','fused')
         if self.params.get('svd_crop', None) is not None:
             crop = self.params['svd_crop']
@@ -588,7 +613,7 @@ class Job:
             self.params['svd_pix_chunk'] = n.product(self.params['svd_block_shape'])
         if self.params.get('n_svd_blocks_per_batch') is None:
             self.params['n_svd_blocks_per_batch'] = 16
-        self.save_params(dir=svd_dir_tag)
+        self.save_params(copy_dir=svd_dir_tag)
         # return
         svd_info = svu.block_and_svd(mov, n_comp = self.params['n_svd_comp'], 
                                block_shape = self.params['svd_block_shape'],
@@ -650,3 +675,98 @@ class Job:
         n.save(os.path.join(self.dirs['job_dir'],'frames.npy'), tosave)
 
         return nframes, jobids
+    
+
+    def sweep_params(self, params_to_sweep, mov_or_svd, testing_dir_tag='sweep', 
+                             n_test_iters = 1, all_combinations=True, do_vmap=True):
+        init_params = copy.deepcopy(self.params)
+        testing_dir = self.make_new_dir(testing_dir_tag)
+        sweep_summary_path = os.path.join(testing_dir, 'sweep_summary.npy')
+        param_per_run = {}
+        n_per_param = []
+        param_names = []
+        param_vals_list = []
+        for k in params_to_sweep.keys():
+            param_names.append(k)
+            n_per_param.append(len(params_to_sweep[k]))
+            param_vals_list.append(params_to_sweep[k])
+            param_per_run[k] = []
+        if all_combinations:
+            n_combs = n.product(n_per_param)
+            combinations = n.array(list(itertools.product(*param_vals_list)))
+        else:
+            n_combs = n.sum(n_per_param)
+            base_vals = [init_params[param_name] for param_name in param_names]
+            combinations = n.stack([base_vals]*n_combs)
+            cidx = 0
+            for pidx in range(len(param_names)):
+                for vidx in range(n_per_param[pidx]):
+                    combinations[cidx][pidx] = param_vals_list[pidx][vidx]
+                    cidx += 1
+        assert len(combinations) == n_combs
+
+        comb_strs = []; comb_params = []; comb_dir_tags = []; comb_dirs = []
+        for comb_idx, comb in enumerate(combinations):
+            comb_param = copy.deepcopy(init_params)
+            comb_str = 'comb%05d-params' % comb_idx
+            for param_idx, param in enumerate(param_names):
+                param_value = comb[param_idx]
+                if type(param_value) != str:
+                    val_str = '%.03f' % param_value
+                else: val_str = param_value
+                comb_str += '-%s_%s' % (param, val_str)
+                comb_param[param] = param_value    
+            comb_dir_tag = testing_dir_tag + '-comb_%05d' % comb_idx
+            comb_dir = self.make_new_dir(comb_dir_tag)
+            
+            comb_params.append(comb_param); comb_dirs.append(comb_dir); 
+            comb_strs.append(comb_str); comb_dir_tags.append(comb_dir_tag)
+        sweep_summary = {
+            'comb_strs' : comb_strs,
+            'comb_dir_tags' : comb_dir_tags,
+            'comb_params' : comb_params,
+            'comb_dirs' : comb_dirs ,
+            'param_names' : param_names,
+            'combinations' : combinations,
+            'param_sweep_dict' : params_to_sweep}
+        n.save(sweep_summary_path, sweep_summary)
+        self.log("Saving summary for %d combinations to %s" % (n_combs, sweep_summary_path))
+
+        if do_vmap:
+            vmaps = []
+            for comb_idx in range(n_combs):
+                comb_dir_tag = comb_dir_tags[comb_idx]; comb_dir = comb_dirs[comb_idx]
+                comb_str = comb_strs[comb_idx]; 
+                self.log("Running combination %02d/%02d" % (comb_idx + 1, n_combs), 1)
+                self.log("Combination params: %s" % comb_str, 2) 
+                self.log("Saving to tag %s at %s" % (comb_dir_tag,comb_dir), 2) 
+                self.params = comb_params[comb_idx]
+                vmap, mean_img, max_img  = self.calculate_corr_map(mov_or_svd, parent_dir = comb_dir_tag,
+                                            iter_limit=n_test_iters, update_main_params=False)
+                vmaps.append(vmap)
+                sweep_summary['vmaps'] = vmaps
+                sweep_summary['mean_img'] = mean_img
+                sweep_summary['max_img'] = max_img
+                n.save(sweep_summary_path, sweep_summary)
+        return sweep_summary
+    
+    def vis_vmap_sweep(self,summary):
+        nz,ny,nx = summary['vmaps'][0].shape
+        param_dict = summary['param_sweep_dict']
+        param_names = summary['param_names']
+        combinations = summary['combinations']
+        vmaps = summary['vmaps']
+        n_val_per_param = [len(param_dict[k]) for k in param_names]
+        vmap_sweep = n.zeros(tuple(n_val_per_param) + (nz,ny,nx))
+        print(n_val_per_param)
+        print(vmap_sweep.shape)
+        n_params = len(param_names)
+        for cidx, combination in enumerate(combinations):
+            param_idxs = [n.where(param_dict[param_names[pidx]] == combination[pidx])[0][0] \
+                                for pidx in range(n_params)]
+            vmap_sweep[tuple(param_idxs)] = vmaps[cidx]
+        v = ui.napari.view_image(vmap_sweep, name='Corrmap Sweep')
+        v.add_image(summary['mean_img'], name='mean_img')
+        v.add_image(summary['max_img'], name='max_img')
+        v.dims.axis_labels = tuple(param_names + ['z','y','x'])
+        return v

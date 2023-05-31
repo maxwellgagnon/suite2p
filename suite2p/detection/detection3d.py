@@ -16,6 +16,7 @@ def binned_mean(mov: np.ndarray, bin_size) -> np.ndarray:
     mov = mov[:(n_frames // bin_size) * bin_size]
     return mov.reshape(-1, bin_size, Lz, Ly, Lx).astype(np.float32).mean(axis=1)
 
+
 def standard_deviation_over_time(mov: np.ndarray, batch_size: int,sqrt=True, dask=False) -> np.ndarray:
     """
     Returns standard deviation of difference between pixels across time, computed in batches of batch_size.

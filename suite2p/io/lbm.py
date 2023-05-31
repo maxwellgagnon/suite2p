@@ -68,7 +68,7 @@ def load_and_stitch_full_tif_mp(path, channels, n_proc=10, verbose=True,translat
         tiffile = tiffile.reshape(int(n_t_ch/30.0), 30, n1,n2)
   
     rois = get_meso_rois(path)
-  
+    # print("XXXXXX %.2f" % (tiffile.nbytes / 1024**3))
     sh_mem = shared_memory.SharedMemory(create=True, size=tiffile.nbytes)
     sh_tif = n.ndarray(tiffile.shape, dtype=tiffile.dtype, buffer=sh_mem.buf)
     sh_tif[:] = tiffile[:]
