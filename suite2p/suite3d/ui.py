@@ -29,10 +29,16 @@ def load_outputs(output_dir, load_traces = False, trace_names = ['F', 'Fneu','sp
         outputs['iscell'] = n.load(os.path.join(output_dir, 'iscell.npy'))
     else:
         outputs['iscell'] = n.ones((len(outputs['stats'],2)))
+    if 'iscell_extracted.npy' in files:
+        outputs['iscell_extracted'] = n.load(os.path.join(output_dir, 'iscell_extracted.npy'))
+    if 'iscell_curated.npy' in files:
+        outputs['iscell_curated'] = n.load(os.path.join(output_dir, 'iscell_curated.npy'))
+    if 'iscell_curated_slider.npy' in files:
+        outputs['iscell_curated_slider'] = n.load(os.path.join(output_dir, 'iscell_curated_slider.npy'))
 
     if load_traces:
         traces = {}
-        for filename in (trace_names + ['iscell_extracted']):
+        for filename in (trace_names):
             if filename + '.npy' in files:
                 traces[filename] = n.load(os.path.join(output_dir, filename + '.npy'))
             else: print("Not found: %s.npy" % filename)
@@ -107,6 +113,8 @@ def add_callbacks_to_ui(v, layers, outputs, savedir, add_sliders = True, filters
     if os.path.exists(iscell_savepath):
         string = datetime.datetime.now().strftime('%d-%m-%y_%H-%M-%S')
         iscell_curated = n.load(iscell_savepath)
+        print("Found old curated iscell with %d of %d marked as cells" %
+              (iscell_curated[:, 0].sum(), iscell_curated.shape[0]))
         backup_path = os.path.join(savedir, 'iscell_curated_old_%s.npy' % string)
         print("Saving old iscell_curated to backup path %s" % backup_path)
         n.save(backup_path, iscell_curated)
@@ -127,12 +135,21 @@ def add_callbacks_to_ui(v, layers, outputs, savedir, add_sliders = True, filters
     cell_layer = layers['cvol_layer']
     not_cell_layer = layers['nvol_layer']
     
+    update_vols(outputs['stats'], outputs['vmap'].shape, iscell_curated, 
+        layers, update_layers=True)
 
     if add_sliders:
         iscell_slider_path = os.path.join(savedir, 'iscell_curated_slider.npy')
+        if os.path.exists(iscell_slider_path):
+            iscell_curated_slider_old = n.load(iscell_slider_path)
+            backup_path = os.path.join(savedir, 'iscell_curated_slider_old_%s.npy' % string)
+            print("Saving old iscell_curated to backup path %s" % backup_path)
+            n.save(backup_path, iscell_curated_slider_old)
         n.save(iscell_slider_path, iscell_curated)
-        add_curation_sliders(v, iscell_savepath, outputs, layers,
+        sliders, values, ranges = add_curation_sliders(v, iscell_savepath, outputs, layers,
                              iscell_save_path=iscell_slider_path, filters=filters,)
+
+
 
     def get_traces(cidx):
         return ts, spks[cidx], F[cidx], Fneu[cidx]
@@ -163,7 +180,10 @@ def add_callbacks_to_ui(v, layers, outputs, savedir, add_sliders = True, filters
                 iscell_curated[value-1] = 1-iscell_curated[value-1]
                 n.save(iscell_savepath, iscell_curated)
                 print("Updating cell %d" % (value-1))
-                update_vols(outputs['stats'], outputs['vmap'].shape, iscell_curated, 
+                if add_sliders:
+                    slider_callback(v, sliders, ranges, iscell_savepath, iscell_slider_path, values, outputs, layers)
+                else: 
+                    update_vols(outputs['stats'], outputs['vmap'].shape, iscell_curated, 
                             layers, update_layers=True)
                 
 def update_vols(stats, shape, iscell, layers, cmap='Set3', 
@@ -172,8 +192,6 @@ def update_vols(stats, shape, iscell, layers, cmap='Set3',
                                                cmap=cmap, lam_max=lam_max)
     noncell_id_vol, noncell_rgb_vol = make_label_vols(stats, shape, iscell=1-iscell,
                                                    cmap=cmap, lam_max=lam_max)
-    print("Update vols")
-    print("Update layers", update_layers)
     if update_layers:
         print(layers['cvol_layer'])
         layers['cvol_layer'].data = cell_rgb_vol;layers['cvol_layer'].refresh()
@@ -200,7 +218,7 @@ def add_curation_sliders(v, iscell_path, outputs, layers, iscell_save_path = Non
     for slider in sliders:
      slider.slider.sliderReleased.connect(lambda x=0 : slider_callback(v, sliders, 
                 ranges, iscell_path, iscell_save_path, values, outputs, layers))
-    return sliders, values
+    return sliders, values, ranges
 
 def slider_callback(v, sliders, ranges, iscell_path, iscell_save_path, values, outputs, layers):
     iscell = n.load(iscell_path)
