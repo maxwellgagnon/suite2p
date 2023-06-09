@@ -48,7 +48,12 @@ def calculate_corrmap(mov, params, dirs, log_cb = default_log, save=True, return
     # might be worth it
 
     t_batch_size = params['t_batch_size']
-    temporal_hpf = params['temporal_hpf']
+    temporal_hpf = min(t_batch_size, params['temporal_hpf'])
+    if t_batch_size % temporal_hpf != 0:
+        temporal_hpf = int(t_batch_size / (n.floor(t_batch_size / temporal_hpf)))
+        log_cb("Adjusting temporal hpf to %d to evenly divide %d frames" % (temporal_hpf, t_batch_size))
+
+
     npil_filt_xy = params['npil_filt_xy']
     npil_filt_z = params['npil_filt_z']
     conv_filt_xy = params['conv_filt_xy']
@@ -56,7 +61,10 @@ def calculate_corrmap(mov, params, dirs, log_cb = default_log, save=True, return
     intensity_thresh = params.get('intensity_thresh', 0)
     dtype = params['dtype']
     n_proc_corr = params['n_proc_corr']
-    mproc_batchsize = params['mproc_batchsize'] 
+    mproc_batchsize = params['mproc_batchsize']
+    if mproc_batchsize is None: mproc_batchsize = n.ceil(t_batch_size / n_proc_corr)
+
+
     npil_filt_size = (npil_filt_z, npil_filt_xy, npil_filt_xy)
     unif_filt_size = (conv_filt_z, conv_filt_xy, conv_filt_xy)
     do_sdnorm = params.get('do_sdnorm','True')
