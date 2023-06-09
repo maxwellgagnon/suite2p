@@ -21,7 +21,6 @@ params = {
     # Where f0 is the frequency of the line noise, and Q is the quality factor
     'notch_filt' : None,
 
-
     ### Initialization Step ### 
 
     # number of files to use for the initialization step
@@ -45,7 +44,7 @@ params = {
     'override_crosstalk' : None,
     # Percentile: only consider pixels above this percentile when 
     # fitting the crosstalk coefficient
-    'crosstalk_percentile' : 99, 
+    'crosstalk_percentile' : 99.5, 
     # "smoothing" when estimating the crosstalk coefficient 
     'crosstalk_sigma' : 0.01,
     # number of planes (starting from top) used to estimate crosstalk
@@ -127,7 +126,7 @@ params = {
     't_batch_size' : 400,
     # less important batchsize parameter for internal computations
     # for efficiency, should be t_batch_size / n_proc_corr
-    'mproc_batchsize' : 50,
+    'mproc_batchsize' : None,
     # number of processors to use during correlation map calculation
     'n_proc_corr': 8,
     # don't touch this
@@ -139,7 +138,7 @@ params = {
     'patch_size_xy' : (120,120),
     'patch_overlap_xy' : (25,25),
     # only consider timepoints with values above this threshold for detection
-    'activity_thresh' : 2.0,
+    'activity_thresh' : 4.0,
     # only consider timepoints above this percentile for detection. minimum thresh
     # between this and activity_thresh is used
     'percentile' : 99.0,
