@@ -8,13 +8,15 @@ import os
 import copy
 import numpy as n
 import itertools
+from multiprocessing import Pool
+from matplotlib import pyplot as plt
+from skimage.io import imread
 from . import init_pass
 from . import utils as u3d 
 try: 
     import psutil
 except: print("No psutil")
 from suite2p.io import lbm as lbmio
-from multiprocessing import Pool
 from suite2p.suite3d.iter_step import register_dataset, fuse_and_save_reg_file, calculate_corrmap
 from suite2p.suite3d import extension as ext
 from suite2p.suite3d.default_params import get_default_params
@@ -108,6 +110,29 @@ class Job:
         self.params = n.load(params_path, allow_pickle=True).item()
         self.log("Found and loaded params from %s" % params_path)
         return self.params
+
+    
+    def show_summary_plots(self):
+        summary = self.load_summary()
+        f1 = plt.figure(figsize=(8,4), dpi=200)
+        plt.plot(summary['plane_shifts'])
+        plt.xlabel("Plane")
+        plt.ylabel("# pixels of shift")
+        plt.title("LBM shift between planes")
+        plt.ylim(-100,100)
+
+        crosstalk_dir = os.path.join(self.dirs['summary'], 'crosstalk_plots')
+        gamma_fit_img = os.path.join(crosstalk_dir, 'gamma_fit.png')
+        plane_fits_img = os.path.join(crosstalk_dir, 'plane_fits.png')
+
+        im = imread(plane_fits_img)
+        f2,ax = plt.subplots(figsize=(im.shape[0] // 200, im.shape[1] // 200), dpi=400);
+        ax.imshow(im); ax.set_axis_off()
+        im = imread(gamma_fit_img)
+        f3,ax = plt.subplots(figsize=(im.shape[0] // 200, im.shape[1] // 200), dpi=150);
+        ax.imshow(im); ax.set_axis_off()
+
+                
 
     def load_summary(self):
         summary_path = os.path.join(self.dirs['summary'], 'summary.npy')
@@ -267,8 +292,9 @@ class Job:
                                  iter_limit=iter_limit, iter_dir_tag=iter_dir_tag, mov_sub_dir_tag=mov_sub_dir_tag)
 
     def patch_and_detect(self, corrmap_dir_tag='', do_patch_idxs=None, compute_npil_masks=True, ts=(), combined_name='combined'):
-        mov_sub = self.get_registered_movie(corrmap_dir_tag + '-mov_sub', 'mov', axis=0)
-        vmap = self.load_iter_results(-1, dir_tag=corrmap_dir_tag + '-iters')['vmap2'] ** 0.5
+        connector = '-' if len(corrmap_dir_tag) > 0 else ''
+        mov_sub = self.get_registered_movie(corrmap_dir_tag + connector + 'mov_sub', 'mov', axis=0)
+        vmap = self.load_iter_results(-1, dir_tag=corrmap_dir_tag + connector + 'iters')['vmap2'] ** 0.5
         patch_size_xy = self.params['patch_size_xy']
         patch_overlap_xy = self.params['patch_overlap_xy']
         nt,nz,ny,nx = mov_sub.shape
@@ -288,7 +314,7 @@ class Job:
                                                                 ts = self.params.get('detection_time_crop', (None,None)))
             patch_idxs.append(patch_idx)
 
-        combined_dir = self.combine_patches(patch_idxs, parent_dir_tag = corrmap_dir_tag + '-detection', 
+        combined_dir = self.combine_patches(patch_idxs, parent_dir_tag = corrmap_dir_tag + connector + 'detection', 
                                    combined_name=combined_name)
         return combined_dir
 
@@ -304,11 +330,12 @@ class Job:
         patch_dir_tag = patch_str
         if parent_dir is not None:
             dir_prefix = parent_dir
-            if extra_tag is not None: dir_prefix = dir_prefix + '-' + extra_tag
-            det_dir_tag = parent_dir + '-' + det_dir_tag
-            iter_dir_tag = parent_dir + '-' + iter_dir_tag
-            mov_dir_tag = parent_dir + '-' + mov_dir_tag
-            patch_dir_tag = parent_dir + '-' + patch_dir_tag
+            connector = '-' if len(parent_dir) > 0 else ''
+            if extra_tag is not None: dir_prefix = dir_prefix + connector + extra_tag
+            det_dir_tag = parent_dir + connector + det_dir_tag
+            iter_dir_tag = parent_dir + connector + iter_dir_tag
+            mov_dir_tag = parent_dir + connector + mov_dir_tag
+            patch_dir_tag = parent_dir + connector + patch_dir_tag
         detection_dir = self.make_new_dir(det_dir_tag)
         patch_dir = self.make_new_dir(patch_str, parent_dir_name= det_dir_tag, dir_tag = patch_dir_tag)
         n.save(os.path.join(patch_dir, 'params.npy'), self.params)
@@ -326,6 +353,7 @@ class Job:
         patch_info = {'zs' : zs, 'ys' : ys, 'xs' : xs, 'ts' : ts,
                       'vzs' : vzs, 'vys' : vys, 'vxs' : vxs, 'all_params' : self.params}
         if mov is None:
+            print(mov_dir_tag)
             mov = self.get_registered_movie(mov_dir_tag, 'mov_sub',axis=0)
             nt, nz,ny,nx = mov.shape
             mov = mov[ts[0]:ts[1], zs[0]:zs[1], ys[0]:ys[1], xs[0]:xs[1]]
@@ -393,7 +421,7 @@ class Job:
         return patch_dir, patch_info, stats
 
 
-    def extract_and_deconvolve(self, patch_idx=0, mov=None, batchsize_frames = 5000, stats = None, offset=None, 
+    def extract_and_deconvolve(self, patch_idx=0, mov=None, batchsize_frames = 500, stats = None, offset=None, 
                                n_frames=None, stats_dir=None, iscell = None, ts=None, load_F_from_dir=False,
                                parent_dir_tag=None, save_dir = None):
         self.save_params()
@@ -560,7 +588,7 @@ class Job:
                 res[filename] = n.load(os.path.join(iter_dir, filename + '.npy'))
         return res
 
-    def fuse_registered_movie(self, files=None, save=True, n_proc=4, delete_original=False, parent_dir=None):
+    def fuse_registered_movie(self, files=None, save=True, n_proc=8, delete_original=False, parent_dir=None):
         n_skip = self.params['n_skip']
         if files is None:
             files = self.get_registered_files()
@@ -717,7 +745,7 @@ class Job:
                 comb_str += '-%s_%s' % (param, val_str)
                 comb_param[param] = param_value    
             comb_dir_tag = testing_dir_tag + '-comb_%05d' % comb_idx
-            comb_dir = self.make_new_dir(comb_dir_tag)
+            comb_dir = self.make_new_dir(comb_dir_tag, parent_dir_name=testing_dir_tag)
             
             comb_params.append(comb_param); comb_dirs.append(comb_dir); 
             comb_strs.append(comb_str); comb_dir_tags.append(comb_dir_tag)
@@ -770,3 +798,4 @@ class Job:
         v.add_image(summary['max_img'], name='max_img')
         v.dims.axis_labels = tuple(param_names + ['z','y','x'])
         return v
+    
