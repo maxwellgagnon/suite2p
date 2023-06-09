@@ -15,6 +15,7 @@ from itertools import product
 from dask import array as darr
 from skimage.measure import moments
 from ..registration.nonrigid import make_blocks
+import pickle
 
 def make_blocks_3d(nz, ny, nx, block_shape, z_overlap=True):
     ybls, xbls,(n_y_bls, n_x_bls), __, __ = make_blocks(ny, nx, block_size=block_shape[1:])
@@ -115,30 +116,30 @@ def calculate_crosstalk_coeff(im3d, exclude_below=1, sigma=0.01, peak_width=1,
         if verbose:
             print("Plane %d and %d, m_opt: %.2f and m_first: %.2f" % (i, i+15, m_opt, m_first))
         
-        if True:
-            if bounds is None: 
-                bounds = (0, n.percentile(X,99.95))
-            bins = [n.arange(*bounds,1),n.arange(*bounds,1)]
-            col_id = idx % n_cols
-            row_id = idx // n_cols
-            # print(i,idx, col_id, row_id)
-            ax = axs[row_id][col_id]
-            ax.set_aspect('equal')
-            ax.hist2d(X, Y, bins = bins, norm=colors.LogNorm());
-            ax.plot(bins[0], m_opt * bins[0])
-            ax.plot(bins[0], m_first * bins[0])
-            axsins2 = inset_axes(ax, width="30%", height="40%", loc='upper right')
-            axsins2.grid(False)
-            axsins2.plot(ms, liks, label='Min: %.2f, 1st: %.2f' % (m_opt, m_first))
-            # axsins2.set_xlabel("m")
-            axsins2.set_xticks([m_opt], rotation=0)
-            axsins2.set_yticks([])
-            ax.set_xlabel("Plane %d" % i)
-            ax.set_ylabel("Plane %d" % (i+15))
+    
+        if bounds is None: 
+            bounds = (0, n.percentile(X,99.95))
+        bins = [n.arange(*bounds,1),n.arange(*bounds,1)]
+        col_id = idx % n_cols
+        row_id = idx // n_cols
+        # print(i,idx, col_id, row_id)
+        ax = axs[row_id][col_id]
+        ax.set_aspect('equal')
+        ax.hist2d(X, Y, bins = bins, norm=colors.LogNorm());
+        ax.plot(bins[0], m_opt * bins[0])
+        ax.plot(bins[0], m_first * bins[0])
+        axsins2 = inset_axes(ax, width="30%", height="40%", loc='upper right')
+        axsins2.grid(False)
+        axsins2.plot(ms, liks, label='Min: %.2f, 1st: %.2f' % (m_opt, m_first))
+        # axsins2.set_xlabel("m")
+        axsins2.set_xticks([m_opt], rotation=0)
+        axsins2.set_yticks([])
+        ax.set_xlabel("Plane %d" % i)
+        ax.set_ylabel("Plane %d" % (i+15))
     plt.tight_layout()
-    if show_plots: plt.show()
     if save_plots is not None:
-        plt.savefig(os.path.join(plot_dir, 'plane_fits.png'))
+        plt.savefig(os.path.join(plot_dir, 'plane_fits.png'), dpi=200)
+    if show_plots: plt.show()
     plt.close()
 
     m_opts = n.array(m_opts)
@@ -151,22 +152,22 @@ def calculate_crosstalk_coeff(im3d, exclude_below=1, sigma=0.01, peak_width=1,
         gx = gamma.fit(m_opts)
         x = n.linspace(0,1,1001)
         gs = gamma.pdf(x, *gx)
-        if True:
-            f = plt.figure(figsize=(3,3))
-            plt.hist(m_opts,density=True, log=False, bins = n.arange(0,1.01, 0.01))
-            plt.plot(x,gs)
-            plt.yticks([])
-            plt.scatter([x[n.argmax(gs)]], [n.max(gs)], label='Best coeff: %.3f' % x[n.argmax(gs)])
-            plt.legend()
-            plt.xlabel("Coeff value")
-            plt.ylabel("")
-            plt.xlim(0,0.4)
-            plt.title("Histogram of est. coefficients per plane")
-            if show_plots: plt.show()
-            if save_plots is not None:
-                plt.savefig(os.path.join(plot_dir, 'gamma_fit.png'))
-            plt.close()
-            fs.append(f)
+        f = plt.figure(figsize=(3,3))
+        plt.hist(m_opts,density=True, log=False, bins = n.arange(0,1.01, 0.01))
+        plt.plot(x,gs)
+        plt.yticks([])
+        plt.scatter([x[n.argmax(gs)]], [n.max(gs)], label='Best coeff: %.3f' % x[n.argmax(gs)])
+        plt.legend()
+        plt.xlabel("Coeff value")
+        plt.ylabel("")
+        plt.xlim(0,0.4)
+        plt.title("Histogram of est. coefficients per plane")
+        if save_plots is not None:
+            plt.savefig(os.path.join(plot_dir, 'gamma_fit.png'), dpi=200)
+        if show_plots:
+            plt.show()
+        plt.close()
+        fs.append(f)
         best_m = x[n.argmax(gs)]
 
     return m_opts, m_firsts, best_m
