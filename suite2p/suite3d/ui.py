@@ -141,7 +141,7 @@ def add_callbacks_to_ui(v, layers, outputs, savedir, add_sliders = True, filters
         if os.path.exists(iscell_slider_path):
             iscell_curated_slider_old = n.load(iscell_slider_path)
             print("Found old curated + slider-ed iscell with %d of %d marked as cells" %
-                (iscell_curated_slider_old[:, 0].sum(), iscell_curated.shape[0]))
+                  (iscell_curated_slider_old[:, 0].sum(), iscell_curated.shape[0]))
             backup_path = os.path.join(savedir, 'iscell_curated_slider_old_%s.npy' % string)
             print("Saving old iscell_curated to backup path %s" % backup_path)
             n.save(backup_path, iscell_curated_slider_old)
