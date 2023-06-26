@@ -57,7 +57,7 @@ def sum_log_lik_one_line(m, x, y, b = 0, sigma_0 = 10,  c = 1e-10, m_penalty=0):
 def calculate_crosstalk_coeff(im3d, exclude_below=1, sigma=0.01, peak_width=1,     
                             verbose=True, estimate_gamma=True, estimate_from_last_n_planes=None,
                             n_proc = 1, show_plots=True, save_plots = None, force_positive=True,
-                            m_penalty = 0, bounds=None, fit_above_percentile=0):
+                            m_penalty = 0, bounds=None, fit_above_percentile=0, fig_scale=3):
     plt.style.use('seaborn')
     m_opts = [] 
     m_firsts = []
@@ -85,7 +85,7 @@ def calculate_crosstalk_coeff(im3d, exclude_below=1, sigma=0.01, peak_width=1,
 
     # print(n_plots, n_rows, n_cols)
     # print(estimate_from_last_n_planes)
-    f,axs = plt.subplots(n_rows, n_cols, figsize=(n_cols*2, n_rows*2))
+    f,axs = plt.subplots(n_rows, n_cols, figsize=(n_cols*fig_scale, n_rows*fig_scale))
     if n_rows == 1: axs = [axs]
 
     for idx, i in enumerate(range(15 - estimate_from_last_n_planes, 15)):
@@ -126,8 +126,8 @@ def calculate_crosstalk_coeff(im3d, exclude_below=1, sigma=0.01, peak_width=1,
         ax = axs[row_id][col_id]
         ax.set_aspect('equal')
         ax.hist2d(X, Y, bins = bins, norm=colors.LogNorm());
-        ax.plot(bins[0], m_opt * bins[0])
-        ax.plot(bins[0], m_first * bins[0])
+        ax.plot(bins[0], m_opt * bins[0], alpha=0.5, linestyle='--')
+        ax.plot(bins[0], m_first * bins[0], alpha=0.5, linestyle='--')
         axsins2 = inset_axes(ax, width="30%", height="40%", loc='upper right')
         axsins2.grid(False)
         axsins2.plot(ms, liks, label='Min: %.2f, 1st: %.2f' % (m_opt, m_first))

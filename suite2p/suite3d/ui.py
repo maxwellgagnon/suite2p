@@ -72,10 +72,10 @@ def make_label_vols(stats, shape, lam_max = 0.3, iscell=None, cmap='Set3'):
     return cell_id_vol, cell_rgb_vol
 
 
-def create_ui(outputs, cmap='Set3', lam_max = 0.3, scale=(15,4,4)):
+def create_ui(outputs, cmap='Set3', lam_max = 0.3, scale=(15,4,4), iscell_label='iscell_extracted'):
     stats = outputs['stats']; mean_img = outputs['mean_img'];
     vmap = outputs['vmap']; max_img = outputs['max_img']
-    iscell = outputs['iscell_extracted'] if 'iscell_extracted' in outputs.keys() else outputs['iscell']
+    iscell = outputs[iscell_label] if iscell_label in outputs.keys() else outputs['iscell']
     if len(iscell.shape) < 2: iscell = iscell[:,n.newaxis]
     shape = vmap.shape
     coords = [stat['coords'] for stat in stats]
@@ -87,7 +87,8 @@ def create_ui(outputs, cmap='Set3', lam_max = 0.3, scale=(15,4,4)):
     clims_max = get_percentiles(max_img, 0, 99.5)
     clims_vmap = get_percentiles(vmap, 0, 99.9)
 
-    v = napari.view_image(max_img,name='Max Image',contrast_limits=clims_max, scale=scale)
+    v = napari.Viewer()
+    layers['max_img_layer'] = v.add_image(max_img,name='Max Image',contrast_limits=clims_max, scale=scale)
     layers['vmap_layer'] = v.add_image(vmap, name='Corr Map', contrast_limits=clims_vmap, scale=scale)
     layers['mimg_layer'] = v.add_image(mean_img, name='Mean Img', contrast_limits=clims_mean, scale=scale)
     layers['nvol_layer'] = v.add_image(noncell_rgb_vol, name='Non cells', rgb=True, 
@@ -103,22 +104,25 @@ def create_ui(outputs, cmap='Set3', lam_max = 0.3, scale=(15,4,4)):
     return v, layers
 
 import datetime
-def add_callbacks_to_ui(v, layers, outputs, savedir, add_sliders = True, filters=None):
-    spks = outputs['spks']; F = outputs['F']; Fneu = outputs['Fneu']
-    iscell = outputs['iscell_extracted']
-    if len(iscell.shape) < 2: iscell = iscell[:,n.newaxis]
-    iscell_savepath = os.path.join(savedir, 'iscell_curated.npy')
-    if os.path.exists(iscell_savepath):
-        string = datetime.datetime.now().strftime('%d-%m-%y_%H-%M-%S')
-        iscell_curated = n.load(iscell_savepath)
-        print("Found old curated iscell with %d of %d marked as cells" %
-              (iscell_curated[:, 0].sum(), iscell_curated.shape[0]))
-        backup_path = os.path.join(savedir, 'iscell_curated_old_%s.npy' % string)
-        print("Saving old iscell_curated to backup path %s" % backup_path)
-        n.save(backup_path, iscell_curated)
-    else:
-        iscell_curated = iscell.copy()
-    n.save(iscell_savepath, iscell_curated)
+def add_callbacks_to_ui(v, layers, outputs, savedir, add_sliders = True, filters=None, add_curation=True):
+    spks = outputs['spks']; F = outputs.get('F', n.zeros_like(spks)); Fneu = outputs.get('Fneu', n.zeros_like(spks))
+
+    if add_curation:
+        iscell = outputs['iscell_extracted']
+        if len(iscell.shape) < 2:
+            iscell = iscell[:, n.newaxis]
+        iscell_savepath = os.path.join(savedir, 'iscell_curated.npy')
+        if os.path.exists(iscell_savepath):
+            string = datetime.datetime.now().strftime('%d-%m-%y_%H-%M-%S')
+            iscell_curated = n.load(iscell_savepath)
+            print("Found old curated iscell with %d of %d marked as cells" %
+                (iscell_curated[:, 0].sum(), iscell_curated.shape[0]))
+            backup_path = os.path.join(savedir, 'iscell_curated_old_%s.npy' % string)
+            print("Saving old iscell_curated to backup path %s" % backup_path)
+            n.save(backup_path, iscell_curated)
+        else:
+            iscell_curated = iscell.copy()
+        n.save(iscell_savepath, iscell_curated)
     
     n_roi, nt = spks.shape
     ts = n.arange(nt) / outputs['fs']
@@ -133,13 +137,15 @@ def add_callbacks_to_ui(v, layers, outputs, savedir, add_sliders = True, filters
     cell_layer = layers['cvol_layer']
     not_cell_layer = layers['nvol_layer']
     
-    update_vols(outputs['stats'], outputs['vmap'].shape, iscell_curated, 
+    if add_curation:
+        update_vols(outputs['stats'], outputs['vmap'].shape, iscell_curated, 
         layers, update_layers=True)
 
     if add_sliders:
         iscell_slider_path = os.path.join(savedir, 'iscell_curated_slider.npy')
         n.save(iscell_slider_path, iscell_curated)
         if os.path.exists(iscell_slider_path):
+            string = datetime.datetime.now().strftime('%d-%m-%y_%H-%M-%S')
             iscell_curated_slider_old = n.load(iscell_slider_path)
             print("Found old curated + slider-ed iscell with %d of %d marked as cells" %
                   (iscell_curated_slider_old[:, 0].sum(), iscell_curated.shape[0]))
@@ -149,8 +155,6 @@ def add_callbacks_to_ui(v, layers, outputs, savedir, add_sliders = True, filters
             n.save(iscell_slider_path, iscell_curated_slider_old)
         sliders, values, ranges = add_curation_sliders(v, iscell_savepath, outputs, layers,
                              iscell_save_path=iscell_slider_path, filters=filters,)
-
-
 
     def get_traces(cidx):
         return ts, spks[cidx], F[cidx], Fneu[cidx]
@@ -176,7 +180,7 @@ def add_callbacks_to_ui(v, layers, outputs, savedir, add_sliders = True, filters
         value = max(value_c, value_nc)
         if event.button == 1:
             update_plot(widgets,value-1)
-        elif event.button == 2:
+        elif add_curation and event.button == 2:
             if value > 0:
                 iscell_curated[value-1] = 1-iscell_curated[value-1]
                 n.save(iscell_savepath, iscell_curated)
@@ -207,7 +211,7 @@ def add_curation_sliders(v, iscell_path, outputs, layers, iscell_save_path = Non
     if filters is None: 
         peak_vals = [stat['peak_val'] for stat in outputs['stats']]
         filters = [('vmap_peak', (n.min(peak_vals),n.percentile(peak_vals, 80)), 'peak_val', lambda x : x),
-                   ('npix', (0,100), 'lam', lambda x : len(x))]
+                   ('npix', (0,250), 'lam', lambda x : len(x))]
         print(filters[0])
 
     # iscell = n.load(iscell_path)

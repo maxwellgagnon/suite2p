@@ -144,6 +144,7 @@ def calculate_corrmap(mov, params, dirs, log_cb = default_log, save=True, return
             n.save(os.path.join(batch_dirs[batch_idx], 'vmap2.npy'), vmap2)
             n.save(os.path.join(batch_dirs[batch_idx], 'mean_img.npy'), mean_img)
             n.save(os.path.join(batch_dirs[batch_idx], 'max_img.npy'), max_img)
+            n.save(os.path.join(batch_dirs[batch_idx], 'std2_img.npy'), sdmov2)
         gc.collect()
     vmap = vmap2 ** 0.5
     if fix_vmap_edges and nz > 1:
@@ -186,6 +187,8 @@ def calculate_corrmap_for_batch(mov, sdmov2, vmap2, mean_img, max_img, temporal_
     shmem_mov_filt, shmem_par_mov_filt, mov_filt = utils.create_shmem_from_arr(
         mov_sub, copy=False)
     log_cb("Sub and conv", 3)
+    # print(shmem_par_mov_filt)
+    # print(shmem_par_mov_sub)
     det3d.np_sub_and_conv3d_split_shmem(
         shmem_par_mov_sub, shmem_par_mov_filt, npil_filt_size, unif_filt_size, n_proc=n_proc, batch_size=mproc_batchsize,
         np_filt_type=np_filt_type, conv_filt_type = conv_filt_type)
@@ -331,9 +334,9 @@ def fuse_and_save_reg_file(reg_file, reg_fused_dir, centers, shift_xs, n_skip, c
     file_name = reg_file.split(os.sep)[-1]
     fused_file_name = os.path.join(reg_fused_dir, 'fused_' + file_name)
     if mov is None: 
-        print("Loading")
+        # print("Loading")
         mov = n.load(reg_file)
-        print("Loaded")
+        # print("Loaded")
 
     if crop is not None:
         cz, cy, cx = crop
@@ -501,11 +504,11 @@ def register_dataset(tifs, params, dirs, summary, log_cb = default_log,
             log_cb("Batch %d IO thread joined" % (batch_idx))
             log_cb('After IO thread join', level=3,log_mem_usage=True )
             if enforce_positivity:
-                print(loaded_movs[0].shape)
-                print(min_pix_vals.shape)
+                # print(loaded_movs[0].shape)
+                # print(min_pix_vals.shape)
                 log_cb("Subtracting min vals to enfore positivity", 1)
                 loaded_movs[0] -= min_pix_vals.reshape(len(min_pix_vals), 1, 1, 1)
-                print(loaded_movs[0].shape)
+                # print(loaded_movs[0].shape)
             shmem_mov,shmem_mov_params, mov = utils.create_shmem_from_arr(loaded_movs[0], copy=True)
             log_cb("After Sharr creation:", level=3,log_mem_usage=True )
             if batch_idx + 1 < n_batches:

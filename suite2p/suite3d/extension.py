@@ -495,6 +495,7 @@ def extract_activity(mov, stats, batchsize_frames=500, log=default_log, offset=N
         try:
             mov_batch = mov[:,start:end].compute()
         except:
+            log("NOT A DASK ARRAY!",3)
             mov_batch = mov[:,start:end]
         log("Batch size: %d GB" % (mov_batch.nbytes/(1024**3),), 4 )
         for i in range(ns):

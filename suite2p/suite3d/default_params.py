@@ -176,4 +176,11 @@ params = {
     'dcnv_batchsize' : 3000,
     'tau' : 1.3,
 
+    # Legacy
+    'subjects_dir' : None,
+    'subject' : None,
+    'expnum' : None,
+    'date' : None,
+
 }
+
