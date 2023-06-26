@@ -228,8 +228,9 @@ def np_sub_and_conv3d_split_shmem(shmem_sub, shmem_filt, np_filt_size, conv_filt
     if pool is None:
         pool = multiprocessing.Pool(n_proc)
         close=False
+    # print(batches)
     pool.starmap(np_sub_and_conv3d_split_shmem_w, [
-                 (shmem_sub, shmem_filt, b, np_filt_size, conv_filt_size, c1, c2, np_filt, conv_filt) for b in batches])
+                 (shmem_sub, shmem_filt, b.astype(int), np_filt_size, conv_filt_size, c1, c2, np_filt, conv_filt) for b in batches])
     if close:
         pool.close()
         pool.terminate()
