@@ -423,7 +423,7 @@ class Job:
 
     def extract_and_deconvolve(self, patch_idx=0, mov=None, batchsize_frames = 500, stats = None, offset=None, 
                                n_frames=None, stats_dir=None, iscell = None, ts=None, load_F_from_dir=False,
-                               parent_dir_tag=None, save_dir = None):
+                               parent_dir_tag=None, save_dir = None, crop=True):
         self.save_params()
         if stats_dir is None:
             stats_dir = self.get_patch_dir(patch_idx, parent_dir_tag=parent_dir_tag)
@@ -442,8 +442,14 @@ class Job:
                     n.save(os.path.join(stats_dir, 'stats.npy'), stats)
             else:
                 stats = n.load(os.path.join(stats_dir, 'stats.npy'),allow_pickle=True)
+
+        # return stats
         if mov is None:
             mov = self.get_registered_movie('registered_fused_data','fused')
+        if crop:
+            cz, cy, cx = self.params['svd_crop']
+            self.log("Cropping with bounds: %s" % (str(self.params['svd_crop'])))
+            mov = mov[cz[0]:cz[1], :, cy[0]:cy[1], cx[0]:cx[1]]
         if ts is not None:
             mov = mov[:,ts[0]:ts[1]]
         if save_dir is None: save_dir = stats_dir
@@ -460,8 +466,10 @@ class Job:
         save_iscell = os.path.join(save_dir, 'iscell_extracted.npy')
         self.log("Extracting %d valid cells, and saving cell flags to %s" % (len(valid_stats), save_iscell))
         stats = valid_stats
+        # return stats
         n.save(save_iscell, iscell)
-
+        # print(offset, batchsize_frames, n_frames)
+        # return mov, stats
         if not load_F_from_dir:
             self.log("Extracting activity")
             F_roi, F_neu = ext.extract_activity(mov, stats, batchsize_frames=batchsize_frames, offset=offset, n_frames=n_frames)
