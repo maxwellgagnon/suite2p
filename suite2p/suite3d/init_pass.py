@@ -154,6 +154,10 @@ def run_init_pass(job):
                                         'Ly' : ny, 'Lx' : nx,
                                         'nonrigid' : job.params['nonrigid']})
 
+    summary_mov_path = os.path.join(job.dirs['summary'], 'init_mov.npy')
+    n.save(summary_mov_path, init_mov)
+    job.log("Saved init mov to %s" % summary_mov_path)
+
     job.log("Aligning planes and calculating reference images")
     tvecs, ref_img_3d, all_ops, all_refs_masks, ref_img_3d_unaligned = prep_registration(init_mov, reg_ops, job.log, filter_pcorr=params['reg_filter_pcorr'], force_plane_shifts = params.get('force_plane_shifts', None))
 
@@ -166,13 +170,12 @@ def run_init_pass(job):
         'plane_shifts' : tvecs,
         'refs_and_masks' : all_refs_masks,
         'all_ops' : all_ops,
-        'plane_mean' : init_mov.mean(axis=(1,2,3)),
-        'plane_std' : init_mov.std(axis=(1,2,3)),
         'min_pix_vals' : min_pix_vals,
     }
     summary_path = os.path.join(job.dirs['summary'], 'summary.npy')
     job.log("Saving summary to %s" % summary_path)
     n.save(summary_path, summary)
+
 
     if job.params['generate_sample_registered_bins']:
         sample_bin_path = os.path.join(job.dirs['summary'], 'sample_reg_movie.npy')

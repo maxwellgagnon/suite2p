@@ -40,6 +40,87 @@ def init_batches(tifs, batch_size, max_tifs_to_analyze=None):
     return batches
 
 
+
+def calculate_corrmap_from_svd(svd_info, params,dirs, log_cb, iter_limit=None, iter_dir_tag='iters', mov_sub_dir_tag='mov_sub', svs=None):
+    t_batch_size = params['t_batch_size']
+    temporal_hpf = min(t_batch_size, params['temporal_hpf'])
+    if t_batch_size % temporal_hpf != 0:
+        temporal_hpf = int(t_batch_size / (n.floor(t_batch_size / temporal_hpf)))
+        log_cb("Adjusting temporal hpf to %d to evenly divide %d frames" % (temporal_hpf, t_batch_size))
+    fix_vmap_edges = params.get('fix_vmap_edges', True)
+    do_sdnorm = params.get('do_sdnorm', 'True')
+    n_proc_corr = params['n_proc_corr']
+    mproc_batchsize = params['mproc_batchsize']
+    if mproc_batchsize is None: mproc_batchsize = n.ceil(t_batch_size / n_proc_corr)
+
+    npil_filt_size = (params['npil_filt_z'], params['npil_filt_xy'], params['npil_filt_xy'])
+    unif_filt_size = (params['conv_filt_z'], params['conv_filt_xy'], params['conv_filt_xy'])
+
+    log_cb("Using conv_filt: %s, %.2f, %.2f" % (params['conv_filt_type'], params['conv_filt_z'], params['conv_filt_xy']), 1)
+    log_cb("Using np_filt: %s, %.2f, %.2f" % (params['npil_filt_type'], params['npil_filt_z'], params['npil_filt_xy']), 1)
+
+    nz, nt, ny, nx = svd_info['mov_shape']
+    vol_shape = (nz,ny,nx)
+
+    n_batches = int(n.ceil(nt / t_batch_size))
+    if iter_limit is not None: 
+        n_batches = min(iter_limit, n_batches)
+        log_cb("Running only %d batches" % n_batches)
+    batch_dirs, __ = init_batch_files(dirs[iter_dir_tag], makedirs=True, n_batches=n_batches)
+    __, mov_sub_paths = init_batch_files(None, dirs[mov_sub_dir_tag], makedirs=False, n_batches=n_batches, filename='mov_sub')
+    log_cb("Created files and dirs for %d batches" % n_batches, 1)
+
+    svd_root = '\\'.join(svd_info['svd_dirs'][0].split('\\')[:-2])
+    log_cb("Will reconstruct SVD movie on-the-fly from %s with %d components" % (svd_root, params['n_svd_comp']));
+    if svs is None:
+        tic = time.time()
+        svs = svu.load_and_multiply_stack_svs(svd_info['svd_dirs'], params['n_svd_comp'], compute=True)
+        toc = time.time();log_cb("Loaded spatial components in %.2f seconds, %.2f GB" % (toc-tic, svs.nbytes/1024**3))
+    else:
+        n_comp_sv = svs.shape[0]
+        log_cb("Using provided SV matrix, cropping to %d components" % int(params['n_svd_comp']))
+        if params['n_svd_comp'] > n_comp_sv:
+            log_cb("WARNING: the provided SV matrix only has %d components, params specifies %d components!" % (n_comp_sv, params['n_svd_comp']))
+        svs = svs[:int(params['n_svd_comp'])]
+    
+    vmap2 = n.zeros((nz,ny,nx))
+    mean_img = n.zeros((nz,ny,nx))
+    max_img = n.zeros((nz,ny,nx))
+    sdmov2 = n.zeros((nz,ny,nx))
+    n_frames_proc = 0 
+    for batch_idx in range(n_batches):
+        log_cb("Running batch %d of %d" % (batch_idx + 1, n_batches), 2)
+        st_idx = batch_idx * t_batch_size
+        end_idx = min(nt, st_idx + t_batch_size)
+        n_frames_proc += end_idx - st_idx
+
+        log_cb("Reconstructing from svd", 2); recon_tic = time.time(); 
+        movx = svu.reconstruct_movie_batch(svd_info['svd_dirs'], svs, (st_idx, end_idx),
+                                     vol_shape, svd_info['blocks'])
+        log_cb("Reconstructed in %.2f seconds" % (time.time() - recon_tic), 2)
+
+        log_cb("Calculating corr map",2); corrmap_tic = time.time()
+        print(movx.shape)
+        mov_filt = calculate_corrmap_for_batch(movx, sdmov2, vmap2, mean_img, max_img, temporal_hpf, npil_filt_size, unif_filt_size, params['intensity_thresh'],
+                                    n_frames_proc, n_proc_corr, mproc_batchsize, mov_sub_save_path=mov_sub_paths[batch_idx],
+                                    do_sdnorm=do_sdnorm,log_cb=log_cb, return_mov_filt=False, fix_vmap_edges=fix_vmap_edges,
+                                               conv_filt_type=params['conv_filt_type'], np_filt_type=params['npil_filt_type'], dtype=n.float32)
+        log_cb("Calculated corr map in %.2f seconds" % (time.time() - corrmap_tic), 2)
+    
+        log_cb("Saving to %s" % batch_dirs[batch_idx],2)
+        n.save(os.path.join(batch_dirs[batch_idx], 'vmap2.npy'), vmap2)
+        n.save(os.path.join(batch_dirs[batch_idx], 'vmap.npy'), vmap2**0.5)
+        n.save(os.path.join(batch_dirs[batch_idx], 'mean_img.npy'), mean_img)
+        n.save(os.path.join(batch_dirs[batch_idx], 'max_img.npy'), max_img)
+        n.save(os.path.join(batch_dirs[batch_idx], 'std2_img.npy'), sdmov2)
+        gc.collect()
+    vmap = vmap2 ** 0.5
+    if fix_vmap_edges and nz > 1:
+        vmap[0] = vmap[0] * vmap[1].mean() / vmap[0].mean()
+        vmap[-1] = vmap[-1] * vmap[-2].mean() / vmap[-1].mean()
+    n.save(os.path.join(batch_dirs[batch_idx], 'vmap.npy'), vmap)
+    return vmap, mean_img, max_img
+
 def calculate_corrmap(mov, params, dirs, log_cb = default_log, save=True, return_mov_filt=False,iter_limit=None,
                       iter_dir_tag = 'iters', mov_sub_dir_tag = 'mov_sub'):
     # TODO This can be accelerated 
@@ -79,7 +160,7 @@ def calculate_corrmap(mov, params, dirs, log_cb = default_log, save=True, return
     if type(mov) == dict:
         svd_info = mov
         svd_root = '\\'.join(svd_info['svd_dirs'][0].split('\\')[:-2])
-        n_comps = params.get('n_svd_comps', svd_info['n_comps'])
+        n_comps = params.get('n_svd_comp', svd_info['n_comps'])
         crop = params.get('svd_crop_z', None)
         log_cb("Will reconstruct SVD movie on-the-fly from %s with %d components" % (svd_root, n_comps))
         nz, nt, ny, nx = svd_info['mov_shape']

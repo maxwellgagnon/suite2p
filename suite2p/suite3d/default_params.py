@@ -99,14 +99,18 @@ params = {
     # internal parameter for Dask. how many pixels per dask "chunk"
     # best to leave at None, which defaults to the number of pixels in a block
     'svd_pix_chunk' : None,
+    'svd_time_chunk' : 4000,
+    'svd_save_time_chunk' : 400,
+    'svd_save_comp_chunk' : 100,
     # When running the svd decomposition, how many blocks should be computed simultaneously
-    # by dask. 4 works well for 8 processors. Too high leads to memory bottlenecks
-    'n_svd_blocks_per_batch' : 4,
+    # by dask. Too high leads to memory bottlenecks
+    # Limited performance improvement by increasing this
+    'n_svd_blocks_per_batch' : 1,
 
     ### Correlation Map ###
 
     # number of svd components to use in reconstruction
-    'n_svd_comps': 400,
+    'n_svd_comp': 400,
     # Type (gaussian, uniform) and xy/z extents of neuropil filter
     'npil_filt_type' : 'gaussian',
     'npil_filt_xy' : 5.0,
@@ -123,10 +127,10 @@ params = {
     
     # number of time points to process at each iteration
     # should be a multiple of temporal_hpf
-    't_batch_size' : 400,
+    't_batch_size' : 200,
     # less important batchsize parameter for internal computations
     # for efficiency, should be t_batch_size / n_proc_corr
-    'mproc_batchsize' : None,
+    'mproc_batchsize' : 25,
     # number of processors to use during correlation map calculation
     'n_proc_corr': 8,
     # don't touch this

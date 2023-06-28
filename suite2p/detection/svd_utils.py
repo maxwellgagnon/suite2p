@@ -11,7 +11,7 @@ def default_log(string, val=None): print(string)
 
 
 def block_and_svd(mov_reg, n_comp, block_shape= (1, 128, 128), block_overlaps=(0, 18, 18),
-                  t_chunk=4000, pix_chunk= None, n_svd_blocks_per_batch = 36, svd_dir=None,
+                  t_chunk=4000, pix_chunk= None,t_save_chunk=100, comp_chunk=100, n_svd_blocks_per_batch = 4, svd_dir=None,
                   block_validity=None, log_cb=default_log, flip_shape=False, end_batch=None,
                   start_batch = 0, run_svd=True, other_info = {}):
     if not flip_shape:
@@ -74,7 +74,8 @@ def block_and_svd(mov_reg, n_comp, block_shape= (1, 128, 128), block_overlaps=(0
             zarr_dir = os.path.join(svd_block_dir, '%04d' % block_idx)
             os.makedirs(zarr_dir, exist_ok=True)
             temp = run_svd_on_block(block.rechunk((t_chunk, pix_chunk)),
-                                    n_comp, save_zarr=True, svd_dir=zarr_dir)
+                                    n_comp, save_zarr=True, svd_dir=zarr_dir,
+                                    timechunk=t_save_chunk, compchunk=comp_chunk)
             svd_info['svd_dirs'].append(zarr_dir)
             to_compute.append(temp)
         log_cb("Sending batch %d to dask" % batch_idx, 2)
@@ -108,6 +109,17 @@ def block_and_svd(mov_reg, n_comp, block_shape= (1, 128, 128), block_overlaps=(0
     return svd_info
 
 import time
+
+def reconstruct(svd_info, t_indices):
+    pass
+
+def get_overlap_mask(block_shape, overlaps, bsize=3, fsize=1.4):
+    mask = n.zeros(block_shape)
+    noz, noy, nox = overlaps
+    nbz, nby, nbx = block_shape
+    mask[(noz//bsize):(nbz-noz//bsize),(noy//bsize) : (nby-noy//bsize),(nox//bsize) : (nbx-nox//bsize)] = 1
+    mask = ndimage.uniform_filter(mask, (noz//fsize, noy//fsize, nox//fsize))
+    return mask
 
 def reconstruct_overlapping_movie(svd_info, t_indices, filt_size = None, block_chunks=1, normalize=True, n_comps = None, crop_z = None):
     
@@ -244,11 +256,17 @@ def reshape_reconstructed_blocks(blocks, block_shape, mov_shape, grid_shape, rec
         
     return blocks
 
-def run_svd_on_block(block, n_comp, svd_dir=None, save_zarr=True):
-    u,s,v = darr.linalg.svd_compressed(block, k=n_comp, compute=False)
+def run_svd_on_block(block, n_comp, svd_dir=None, save_zarr=True, timechunk=200, compchunk=100,
+                     svd_compressed_params = {}, use_regular_svd=False):
+    if use_regular_svd:
+        u,s,v = darr.linalg.svd(block)
+    else:
+        u,s,v = darr.linalg.svd_compressed(block, k=n_comp, **svd_compressed_params)
     if not save_zarr:
         return u,s,v
-    u = u.rechunk((-1,None))
+    u = u.rechunk((timechunk,compchunk))
+    s = s.rechunk((compchunk,))
+    v = v.rechunk((compchunk, -1))
     zarrs = {}
     temp_vals = []
     for zarr_name, arr in zip(['u','s','v'], (u,s,v)):
@@ -427,6 +445,55 @@ def rechunk_usv_comps(u, s, v, comp_chunksize=16, z_chunksize=None, t_chunksize=
         v = v.rechunk(tuple(cs))
     return u, s, v
 
+def reconstruct_movie_batch(stack_block_dirs, svs, t_indices, vol_shape, block_limits):
+    block_shape = tuple(n.diff(block_limits[:,0])[:,0])
+    block_overlaps = tuple([int(n.median(block_shape[i] - n.diff(n.unique(block_limits[i,:,0]))))\
+                            for i in range(3)])
+    nt = t_indices[1]-t_indices[0]
+    n_block, n_comp, n_pix = svs.shape
+
+    us = load_stack_us(stack_block_dirs, n_comp=n_comp, t_indices=t_indices, compute=True)
+    mask = get_overlap_mask(block_shape, block_overlaps)
+    mov_out = n.zeros((nt,) + vol_shape, dtype=n.float32)
+    norm = n.zeros(vol_shape, dtype=n.float32)
+    for i in range(n_block):
+        zz,yy,xx = block_limits[:,i]
+        mov_out[:, zz[0]:zz[1], yy[0]:yy[1], xx[0]:xx[1]] += mask * (us[i] @ svs[i]).reshape(nt, *block_shape)
+        norm[zz[0]:zz[1], yy[0]:yy[1], xx[0]:xx[1]] += mask
+    return mov_out / norm
+
+
+def load_and_multiply_stack_svs(stack_block_dirs, n_comp, compute=True):
+    ss, vs = load_stack_svs(stack_block_dirs, n_comp, compute=False)
+    # print(ss.dtype)
+    svs = (vs * ss[:,:,n.newaxis])
+    # print(svs.dtype)
+    if compute: svs = svs.compute()
+    return svs
+
+def load_stack_svs(stack_block_dirs, n_comp, compute=False):
+    ss = []; vs = []
+    n_blocks = len(stack_block_dirs)
+    for block_dir in stack_block_dirs:
+        # somehow it is faster to combine them all then compute everything after
+        s,v = load_sv(block_dir, n_comp, compute=False)
+        ss.append(s)
+        vs.append(v)
+    ss = darr.array(ss, dtype=n.float32)
+    vs = darr.array(vs, dtype=n.float32)
+    if compute:
+        ss = ss.compute()
+        vs = vs.compute()
+    return ss, vs
+
+def load_stack_us(stack_block_dirs, n_comp, t_indices=None, compute=False):
+    us = []
+    for block_dir in stack_block_dirs:
+        u = load_u(block_dir, n_comp, t_indices=t_indices, compute=False)
+        us.append(u)
+    us = darr.array(us)
+    if compute: us = us.compute()
+    return us
 
 def load_stack_usvs(stack_block_dirs, n_comp, stack_axis=1, compute=False,t_batch_size=None, t_indices=None):
     us = []
@@ -497,19 +564,40 @@ def hpf_and_norm(u, s, v, window_size, norm_by_dif=True, out_t_chunk=None, use_h
     return u_hpf, s, v
 
 
-def load_usv(block_dir, n_comp, t_chunks=None, v_chunks=-1, compute=False, t_indices=None):
-    u = darr.from_zarr(os.path.join(block_dir, 'u.zarr'), chunks=(-1, n_comp))[:, :n_comp]
+def load_usv(block_dir, n_comp, t_chunks=None, v_chunks=-1, compute=False, t_indices=None, dtype=n.float32):
+    u = darr.from_zarr(os.path.join(block_dir, 'u.zarr'), chunks=(-1, n_comp))[:, :n_comp].astype(dtype)
     if t_chunks is not None:
         u = u.rechunk((t_chunks, -1))
     if t_indices is not None:
         u = u[t_indices[0]:t_indices[1]]
-    s = darr.from_zarr(os.path.join(block_dir, 's.zarr'), chunks=(n_comp))[:n_comp]
-    v = darr.from_zarr(os.path.join(block_dir, 'v.zarr'), chunks=(n_comp, -1))[:n_comp]
+    s = darr.from_zarr(os.path.join(block_dir, 's.zarr'), chunks=(n_comp))[:n_comp].astype(dtype)
+    v = darr.from_zarr(os.path.join(block_dir, 'v.zarr'), chunks=(n_comp, -1))[:n_comp].astype(dtype)
     if v_chunks is not None:
         v = v.rechunk((None, v_chunks))
     if compute:
         return u.compute(), s.compute(), v.compute()
     return u, s, v
+
+def load_u(block_dir, n_comp,compute=False, t_indices = None, t_chunks = -1, dtype=n.float32):
+    if t_indices is not None and t_chunks == -1: t_chunks = t_indices[1]-t_indices[0]
+    u = darr.from_zarr(os.path.join(block_dir, 'u.zarr'),
+                       chunks=(t_chunks, n_comp))[:, :n_comp].astype(dtype)
+    if t_indices is not None:
+        u = u[t_indices[0]:t_indices[1]]
+    if compute:
+        return u.compute()
+    else:
+        return u
+
+
+def load_sv(block_dir, n_comp, compute=False, v_chunks=-1, dtype=n.float32):
+    s = darr.from_zarr(os.path.join(block_dir, 's.zarr'), chunks=(n_comp))[:n_comp].astype(dtype)
+    v = darr.from_zarr(os.path.join(block_dir, 'v.zarr'), chunks=(n_comp, v_chunks))[:n_comp].astype(dtype)
+    if compute:
+        return s.compute(), v.compute()
+    return s, v
+
+
 def load_usv2(block_dir, n_comp, t_chunks=None, v_chunks=-1):
     if t_chunks is not None:
         u = darr.from_zarr(os.path.join(block_dir, 'u.zarr'), chunks=(t_chunks, n_comp))[:, :n_comp]

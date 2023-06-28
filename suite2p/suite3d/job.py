@@ -17,7 +17,7 @@ try:
     import psutil
 except: print("No psutil")
 from suite2p.io import lbm as lbmio
-from suite2p.suite3d.iter_step import register_dataset, fuse_and_save_reg_file, calculate_corrmap
+from suite2p.suite3d.iter_step import register_dataset, fuse_and_save_reg_file, calculate_corrmap, calculate_corrmap_from_svd
 from suite2p.suite3d import extension as ext
 from suite2p.suite3d.default_params import get_default_params
 from suite2p.extraction import dcnv
@@ -25,7 +25,7 @@ from suite2p.detection import svd_utils as svu
 from . import ui
 
 class Job:
-    def __init__(self, root_dir, job_id, params=None, tifs=None, overwrite=False, verbosity=10, create=True):
+    def __init__(self, root_dir, job_id, params=None, tifs=None, overwrite=False, verbosity=10, create=True, params_path=None):
         """Create a Job object that is a wrapper to manage files, current state, log etc.
 
         Args:
@@ -57,7 +57,7 @@ class Job:
         else:
             self.job_dir = os.path.join(root_dir,'s3d-%s' % job_id)
             self.load_dirs()
-            self.load_params()
+            self.load_params(params_path=params_path)
             self.tifs = self.params.get('tifs', [])
 
 
@@ -103,10 +103,11 @@ class Job:
             n.save(os.path.join(self.dirs['job_dir'], 'params.npy'), params)
         self.log("Updated main params file")
 
-    def load_params(self, dir = None):
-        if dir is None:
-            dir = 'job_dir'
-        params_path = os.path.join(self.dirs[dir], 'params.npy')
+    def load_params(self, dir = None, params_path = None):
+        if params_path is None:
+            if dir is None:
+                dir = 'job_dir'
+            params_path = os.path.join(self.dirs[dir], 'params.npy')
         self.params = n.load(params_path, allow_pickle=True).item()
         self.log("Found and loaded params from %s" % params_path)
         return self.params
@@ -267,7 +268,8 @@ class Job:
 
 
 
-    def calculate_corr_map(self, mov=None, save=True, return_mov_filt=False, crop=None, svd_info=None, iter_limit=None, parent_dir = None, update_main_params=True):
+    def calculate_corr_map(self, mov=None, save=True, return_mov_filt=False, crop=None, svd_info=None, iter_limit=None, 
+                            parent_dir = None, update_main_params=True, svs = None):
         self.save_params(copy_dir=parent_dir, update_main_params=update_main_params)
         mov_sub_dir_tag = 'mov_sub'
         iter_dir_tag = 'iters'
@@ -280,16 +282,22 @@ class Job:
         self.log("Saving mov_sub to %s" % mov_sub_dir)
         if svd_info is not None:
             mov = svd_info
-        elif mov is None:
-            mov = self.get_registered_movie('registered_fused_data', 'fused')
-        if crop is not None and svd_info is None:
-            assert svd_info is None, 'cant crop with svd - easy fix'
-            self.params['detection_crop'] = crop
-            self.save_params(copy_dir='mov_sub', update_main_params=False)
-            mov = mov[crop[0][0]:crop[0][1], :, crop[1][0]:crop[1][1], crop[2][0]:crop[2][1]]
-            self.log("Cropped movie to shape: %s" % str(mov.shape))
-        return calculate_corrmap(mov, self.params, self.dirs, self.log, return_mov_filt=return_mov_filt, save=save,
-                                 iter_limit=iter_limit, iter_dir_tag=iter_dir_tag, mov_sub_dir_tag=mov_sub_dir_tag)
+            self.log("Using SVD shortcut, loading entire V matrix to memory")
+            out = calculate_corrmap_from_svd(svd_info, params=self.params, log_cb=self.log, iter_limit=iter_limit, svs=svs, dirs = self.dirs,
+                                            iter_dir_tag=iter_dir_tag, mov_sub_dir_tag=mov_sub_dir_tag)
+        else:
+            if mov is None:
+                mov = self.get_registered_movie('registered_fused_data', 'fused')
+            if crop is not None and svd_info is None:
+                assert svd_info is None, 'cant crop with svd - easy fix'
+                self.params['detection_crop'] = crop
+                self.save_params(copy_dir='mov_sub', update_main_params=False)
+                mov = mov[crop[0][0]:crop[0][1], :, crop[1][0]:crop[1][1], crop[2][0]:crop[2][1]]
+                self.log("Cropped movie to shape: %s" % str(mov.shape))
+            out =  calculate_corrmap(mov, self.params, self.dirs, self.log, return_mov_filt=return_mov_filt, save=save,
+                                    iter_limit=iter_limit, iter_dir_tag=iter_dir_tag, mov_sub_dir_tag=mov_sub_dir_tag)
+
+        return out 
 
     def patch_and_detect(self, corrmap_dir_tag='', do_patch_idxs=None, compute_npil_masks=True, ts=(), combined_name='combined'):
         connector = '-' if len(corrmap_dir_tag) > 0 else ''
@@ -452,6 +460,7 @@ class Job:
             mov = mov[cz[0]:cz[1], :, cy[0]:cy[1], cx[0]:cx[1]]
         if ts is not None:
             mov = mov[:,ts[0]:ts[1]]
+        self.log("Movie shape: %s" % (str(mov.shape)))
         if save_dir is None: save_dir = stats_dir
         if iscell is None: 
             iscell = n.ones((len(stats), 2), int)
@@ -646,7 +655,13 @@ class Job:
             self.log("Time-cropped to size %s" % str(mov.shape))
         
         if self.params.get('svd_pix_chunk') is None:
-            self.params['svd_pix_chunk'] = n.product(self.params['svd_block_shape'])
+            self.params['svd_pix_chunk'] = n.product(self.params['svd_block_shape']) // 2
+        if self.params.get('svd_time_chunk') is None:
+            self.params['svd_save_time_chunk'] = 4000
+        if self.params.get('svd_save_time_chunk') is None:
+            self.params['svd_save_comp_chunk'] = 400
+        if self.params.get('svd_save_comp_chunk') is None:
+            self.params['svd_comp_chunk'] = 100
         if self.params.get('n_svd_blocks_per_batch') is None:
             self.params['n_svd_blocks_per_batch'] = 16
         self.save_params(copy_dir=svd_dir_tag)
@@ -655,6 +670,9 @@ class Job:
                                block_shape = self.params['svd_block_shape'],
                                block_overlaps = self.params['svd_block_overlaps'],
                                pix_chunk = self.params['svd_pix_chunk'],
+                               t_chunk = self.params['svd_time_chunk'],
+                               t_save_chunk = self.params['svd_save_time_chunk'],
+                               comp_chunk = self.params['svd_save_comp_chunk'],
                                n_svd_blocks_per_batch = self.params['n_svd_blocks_per_batch'],
                                log_cb = self.log,
                                svd_dir = svd_dir, run_svd=run_svd)
@@ -713,16 +731,18 @@ class Job:
         return nframes, jobids
     
 
-    def sweep_params(self, params_to_sweep, mov_or_svd, testing_dir_tag='sweep', 
-                             n_test_iters = 1, all_combinations=True, do_vmap=True):
+    def sweep_params(self, params_to_sweep,svd_info=None, mov=None, testing_dir_tag='sweep', 
+                             n_test_iters = 1, all_combinations=True, do_vmap=True, svs=None,
+                             test_parent_dir = None):
         init_params = copy.deepcopy(self.params)
-        testing_dir = self.make_new_dir(testing_dir_tag)
+        testing_dir = self.make_new_dir(testing_dir_tag, parent_dir_name=test_parent_dir)
         sweep_summary_path = os.path.join(testing_dir, 'sweep_summary.npy')
         param_per_run = {}
         n_per_param = []
         param_names = []
         param_vals_list = []
         for k in params_to_sweep.keys():
+            assert k in self.params.keys()
             param_names.append(k)
             n_per_param.append(len(params_to_sweep[k]))
             param_vals_list.append(params_to_sweep[k])
@@ -773,12 +793,12 @@ class Job:
             for comb_idx in range(n_combs):
                 comb_dir_tag = comb_dir_tags[comb_idx]; comb_dir = comb_dirs[comb_idx]
                 comb_str = comb_strs[comb_idx]; 
-                self.log("Running combination %02d/%02d" % (comb_idx + 1, n_combs), 1)
+                self.log("Running combination %02d/%02d" % (comb_idx + 1, n_combs), 0)
                 self.log("Combination params: %s" % comb_str, 2) 
                 self.log("Saving to tag %s at %s" % (comb_dir_tag,comb_dir), 2) 
                 self.params = comb_params[comb_idx]
-                vmap, mean_img, max_img  = self.calculate_corr_map(mov_or_svd, parent_dir = comb_dir_tag,
-                                            iter_limit=n_test_iters, update_main_params=False)
+                vmap, mean_img, max_img  = self.calculate_corr_map(mov=mov, svd_info=svd_info, parent_dir = comb_dir_tag,
+                                            iter_limit=n_test_iters, update_main_params=False, svs=svs)
                 vmaps.append(vmap)
                 sweep_summary['vmaps'] = vmaps
                 sweep_summary['mean_img'] = mean_img
