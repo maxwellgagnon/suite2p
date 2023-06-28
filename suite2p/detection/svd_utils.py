@@ -452,6 +452,7 @@ def reconstruct_movie_batch(stack_block_dirs, svs, t_indices, vol_shape, block_l
     nt = t_indices[1]-t_indices[0]
     n_block, n_comp, n_pix = svs.shape
 
+    len(stack_block_dirs)
     us = load_stack_us(stack_block_dirs, n_comp=n_comp, t_indices=t_indices, compute=True)
     mask = get_overlap_mask(block_shape, block_overlaps)
     mov_out = n.zeros((nt,) + vol_shape, dtype=n.float32)
@@ -460,6 +461,7 @@ def reconstruct_movie_batch(stack_block_dirs, svs, t_indices, vol_shape, block_l
         zz,yy,xx = block_limits[:,i]
         mov_out[:, zz[0]:zz[1], yy[0]:yy[1], xx[0]:xx[1]] += mask * (us[i] @ svs[i]).reshape(nt, *block_shape)
         norm[zz[0]:zz[1], yy[0]:yy[1], xx[0]:xx[1]] += mask
+    norm[norm < 1e-4] = n.inf
     return mov_out / norm
 
 

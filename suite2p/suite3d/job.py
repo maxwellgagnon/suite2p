@@ -481,7 +481,7 @@ class Job:
         # return mov, stats
         if not load_F_from_dir:
             self.log("Extracting activity")
-            F_roi, F_neu = ext.extract_activity(mov, stats, batchsize_frames=batchsize_frames, offset=offset, n_frames=n_frames)
+            F_roi, F_neu = ext.extract_activity(mov, stats, batchsize_frames=batchsize_frames, offset=offset, n_frames=n_frames, intermediate_save_dir=save_dir)
             n.save(os.path.join(save_dir, 'F.npy'), F_roi)
             n.save(os.path.join(save_dir, 'Fneu.npy'), F_neu)
         else:
@@ -821,9 +821,10 @@ class Job:
             param_idxs = [n.where(param_dict[param_names[pidx]] == combination[pidx])[0][0] \
                                 for pidx in range(n_params)]
             vmap_sweep[tuple(param_idxs)] = vmaps[cidx]
-        v = ui.napari.view_image(vmap_sweep, name='Corrmap Sweep')
+        v = ui.napari.Viewer()
         v.add_image(summary['mean_img'], name='mean_img')
         v.add_image(summary['max_img'], name='max_img')
+        v.add_image(vmap_sweep, name='Corrmap Sweep')
         v.dims.axis_labels = tuple(param_names + ['z','y','x'])
         return v
     

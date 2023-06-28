@@ -81,7 +81,7 @@ def calculate_corrmap_from_svd(svd_info, params,dirs, log_cb, iter_limit=None, i
         log_cb("Using provided SV matrix, cropping to %d components" % int(params['n_svd_comp']))
         if params['n_svd_comp'] > n_comp_sv:
             log_cb("WARNING: the provided SV matrix only has %d components, params specifies %d components!" % (n_comp_sv, params['n_svd_comp']))
-        svs = svs[:int(params['n_svd_comp'])]
+        svs = svs[:, :int(params['n_svd_comp'])]
     
     vmap2 = n.zeros((nz,ny,nx))
     mean_img = n.zeros((nz,ny,nx))
@@ -100,7 +100,6 @@ def calculate_corrmap_from_svd(svd_info, params,dirs, log_cb, iter_limit=None, i
         log_cb("Reconstructed in %.2f seconds" % (time.time() - recon_tic), 2)
 
         log_cb("Calculating corr map",2); corrmap_tic = time.time()
-        print(movx.shape)
         mov_filt = calculate_corrmap_for_batch(movx, sdmov2, vmap2, mean_img, max_img, temporal_hpf, npil_filt_size, unif_filt_size, params['intensity_thresh'],
                                     n_frames_proc, n_proc_corr, mproc_batchsize, mov_sub_save_path=mov_sub_paths[batch_idx],
                                     do_sdnorm=do_sdnorm,log_cb=log_cb, return_mov_filt=False, fix_vmap_edges=fix_vmap_edges,
