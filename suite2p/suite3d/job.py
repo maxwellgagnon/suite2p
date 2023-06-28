@@ -269,7 +269,7 @@ class Job:
 
 
     def calculate_corr_map(self, mov=None, save=True, return_mov_filt=False, crop=None, svd_info=None, iter_limit=None, 
-                            parent_dir = None, update_main_params=True, svs = None):
+                            parent_dir = None, update_main_params=True, svs = None, us=None):
         self.save_params(copy_dir=parent_dir, update_main_params=update_main_params)
         mov_sub_dir_tag = 'mov_sub'
         iter_dir_tag = 'iters'
@@ -283,7 +283,7 @@ class Job:
         if svd_info is not None:
             mov = svd_info
             self.log("Using SVD shortcut, loading entire V matrix to memory")
-            out = calculate_corrmap_from_svd(svd_info, params=self.params, log_cb=self.log, iter_limit=iter_limit, svs=svs, dirs = self.dirs,
+            out = calculate_corrmap_from_svd(svd_info, params=self.params, log_cb=self.log, iter_limit=iter_limit, svs=svs, us=us, dirs = self.dirs,
                                             iter_dir_tag=iter_dir_tag, mov_sub_dir_tag=mov_sub_dir_tag)
         else:
             if mov is None:
@@ -732,7 +732,7 @@ class Job:
     
 
     def sweep_params(self, params_to_sweep,svd_info=None, mov=None, testing_dir_tag='sweep', 
-                             n_test_iters = 1, all_combinations=True, do_vmap=True, svs=None,
+                             n_test_iters = 1, all_combinations=True, do_vmap=True, svs=None,us=None,
                              test_parent_dir = None):
         init_params = copy.deepcopy(self.params)
         testing_dir = self.make_new_dir(testing_dir_tag, parent_dir_name=test_parent_dir)
@@ -798,7 +798,7 @@ class Job:
                 self.log("Saving to tag %s at %s" % (comb_dir_tag,comb_dir), 2) 
                 self.params = comb_params[comb_idx]
                 vmap, mean_img, max_img  = self.calculate_corr_map(mov=mov, svd_info=svd_info, parent_dir = comb_dir_tag,
-                                            iter_limit=n_test_iters, update_main_params=False, svs=svs)
+                                            iter_limit=n_test_iters, update_main_params=False, svs=svs, us=us)
                 vmaps.append(vmap)
                 sweep_summary['vmaps'] = vmaps
                 sweep_summary['mean_img'] = mean_img

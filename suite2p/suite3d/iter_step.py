@@ -41,7 +41,7 @@ def init_batches(tifs, batch_size, max_tifs_to_analyze=None):
 
 
 
-def calculate_corrmap_from_svd(svd_info, params,dirs, log_cb, iter_limit=None, iter_dir_tag='iters', mov_sub_dir_tag='mov_sub', svs=None):
+def calculate_corrmap_from_svd(svd_info, params,dirs, log_cb, iter_limit=None, iter_dir_tag='iters', mov_sub_dir_tag='mov_sub', svs=None, us=None):
     t_batch_size = params['t_batch_size']
     temporal_hpf = min(t_batch_size, params['temporal_hpf'])
     if t_batch_size % temporal_hpf != 0:
@@ -95,8 +95,13 @@ def calculate_corrmap_from_svd(svd_info, params,dirs, log_cb, iter_limit=None, i
         n_frames_proc += end_idx - st_idx
 
         log_cb("Reconstructing from svd", 2); recon_tic = time.time(); 
+        if us is not None:
+            # print(st_idx, end_idx)
+            usx = us[:, st_idx:end_idx, :int(params['n_svd_comp'])]
+            log_cb("Using provided U, cropped to %s" % (str(usx.shape)),3)
+        else: usx = None
         movx = svu.reconstruct_movie_batch(svd_info['svd_dirs'], svs, (st_idx, end_idx),
-                                     vol_shape, svd_info['blocks'])
+                                     vol_shape, svd_info['blocks'], us = usx)
         log_cb("Reconstructed in %.2f seconds" % (time.time() - recon_tic), 2)
 
         log_cb("Calculating corr map",2); corrmap_tic = time.time()
@@ -214,11 +219,12 @@ def calculate_corrmap(mov, params, dirs, log_cb = default_log, save=True, return
                     log_cb("Not a dask array", 3)
                 movx = movx.astype(dtype)
         log_cb("Loaded and swapped, idx %d to %d" % (st_idx, end_idx), 2)
-        log_cb("Calculating corr map",2)
+        log_cb("Calculating corr map",2); tic = time.time()
         mov_filt = calculate_corrmap_for_batch(movx, sdmov2, vmap2, mean_img, max_img, temporal_hpf, npil_filt_size, unif_filt_size, intensity_thresh,
                                     n_frames_proc, n_proc_corr, mproc_batchsize, mov_sub_save_path=mov_sub_paths[batch_idx],do_sdnorm=do_sdnorm,
                                     log_cb=log_cb, return_mov_filt=return_mov_filt, fix_vmap_edges=fix_vmap_edges,
                                                conv_filt_type=conv_filt_type, np_filt_type=npil_filt_type, dtype=dtype)
+        log_cb("Calculated corr map in %.2f seconds" % (time.time() - tic))
         if save:
             log_cb("Saving to %s" % batch_dirs[batch_idx],2)
             n.save(os.path.join(batch_dirs[batch_idx], 'vmap2.npy'), vmap2)

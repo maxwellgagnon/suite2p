@@ -487,8 +487,10 @@ def extract_activity(mov, stats, batchsize_frames=500, log=default_log, offset=N
     F_neu = n.zeros((ns, nt))
     # print(offset)
     n_batches = int(n.ceil(nt / batchsize_frames))
-    batch_save_interval = 20
+    batch_save_interval = 100
     log("Will extract in %d batches of %d" % (n_batches, batchsize_frames), 3)
+    if intermediate_save_dir is not None:
+        log("Saving intermediate results to %s" % intermediate_save_dir)
     for batch_idx in range(n_batches):
         log("Extracting batch %04d of %04d" % (batch_idx, n_batches), 4)
         start = batch_idx * batchsize_frames
@@ -514,8 +516,8 @@ def extract_activity(mov, stats, batchsize_frames=500, log=default_log, offset=N
             lam = stat['lam'] / stat['lam'].sum()
             F_roi[i,start:end] = lam @ mov_batch[zc,:,yc,xc]
             F_neu[i,start:end] = mov_batch[npzc,:,npyc,npxc].mean(axis=0)
-            if intermediate_save_dir is not None and batch_idx > 0 and batch_idx % batch_save_interval == 0:
-                log("Saving intermediate results to %s" % intermediate_save_dir)
-                n.save(os.path.join(intermediate_save_dir, 'F_int.npy'), F_roi)
-                n.save(os.path.join(intermediate_save_dir, 'Fneu_int.npy'), F_neu)
+        if (intermediate_save_dir is not None) and (batch_idx > 0) and (batch_idx % batch_save_interval == 0):
+            log("Batch %d: Saving intermediate results to %s" % (batch_idx, intermediate_save_dir))
+            n.save(os.path.join(intermediate_save_dir, 'F.npy'), F_roi)
+            n.save(os.path.join(intermediate_save_dir, 'Fneu.npy'), F_neu)
     return F_roi, F_neu
