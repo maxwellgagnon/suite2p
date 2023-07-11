@@ -53,7 +53,7 @@ def load_and_stitch_tifs(paths, planes, verbose=True,n_proc=15, mp_args = {}, fi
         size = mov.nbytes/(1024*1024*1024)
     else: 
         mov = mov_list
-        size = -1
+        size = n.sum([mx.nbytes/(1024**3) for mx in mov])
     if verbose: log_cb("Loaded %d files, total %.2f GB" % (len(paths),size),1)
     return mov
 

@@ -87,8 +87,10 @@ def calculate_crosstalk_coeff(im3d, exclude_below=1, sigma=0.01, peak_width=1,
     # print(estimate_from_last_n_planes)
     f,axs = plt.subplots(n_rows, n_cols, figsize=(n_cols*fig_scale, n_rows*fig_scale))
     if n_rows == 1: axs = [axs]
+    
 
     for idx, i in enumerate(range(15 - estimate_from_last_n_planes, 15)):
+        # print("Plot for plane %d" % i)
         X = im3d[i].flatten()
         Y = im3d[i+15].flatten()
         fit_thresh = n.percentile(X, fit_above_percentile)
@@ -132,16 +134,23 @@ def calculate_crosstalk_coeff(im3d, exclude_below=1, sigma=0.01, peak_width=1,
         axsins2.grid(False)
         axsins2.plot(ms, liks, label='Min: %.2f, 1st: %.2f' % (m_opt, m_first))
         # axsins2.set_xlabel("m")
-        axsins2.set_xticks([m_opt], rotation=0)
+        axsins2.set_xticks([m_opt])
         axsins2.set_yticks([])
         ax.set_xlabel("Plane %d" % i)
         ax.set_ylabel("Plane %d" % (i+15))
-    plt.tight_layout()
-    if save_plots is not None:
-        plt.savefig(os.path.join(plot_dir, 'plane_fits.png'), dpi=200)
-    if show_plots: plt.show()
-    plt.close()
 
+    plt.tight_layout()
+    # print('showing')
+    # if show_plots: plt.show()
+    # print("showed")
+    print("Saving figure to %s" % plot_dir)
+    if save_plots is not None:
+        f.savefig(os.path.join(plot_dir, 'plane_fits.png'), dpi=200)
+    print("saved")
+    plt.close()
+    print("Close figure")
+
+    # return
     m_opts = n.array(m_opts)
     m_firsts = n.array(m_firsts)
     
@@ -179,9 +188,9 @@ def shift_movie_plane(plane_id, sh_mem_name, tvec, shape, dtype, verbose=True):
     plane = mov3d[plane_id]
     tvec = tvec
     for i in range(plane.shape[0]):
-        if i % 100 == 0:
-            if verbose:
-                print("Plane %02d: %d " % (plane_id, i))
+        # if i % 100 == 0:
+            # if verbose:
+                # print("Plane %02d: %d " %  (plane_id, i))
         mov3d[plane_id][i] = imreg.transform_img(mov3d[plane_id][i], tvec=tvec)
     sh_mem.close()
 

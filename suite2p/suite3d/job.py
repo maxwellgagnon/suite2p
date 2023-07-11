@@ -579,7 +579,7 @@ class Job:
         
 
     def get_registered_files(self, key='registered_data', filename_filter='reg_data'):
-        all_files = n.os.listdir(self.dirs[key])
+        all_files = os.listdir(self.dirs[key])
         reg_files = [os.path.join(self.dirs[key],x) for x in all_files if x.startswith(filename_filter)]
         return reg_files
     def get_denoised_files(self):

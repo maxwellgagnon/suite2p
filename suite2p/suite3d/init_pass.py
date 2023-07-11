@@ -119,7 +119,7 @@ def run_init_pass(job):
         job.log("Enforcing positivity in mean image",3)
         init_mov -= min_pix_vals[:, n.newaxis, n.newaxis, n.newaxis]
         
-        job.log("Min pix vals: %s" % str(min_pix_vals.flatten()), 3)
+        # job.log("Min pix vals: %s" % str(min_pix_vals.flatten()), 3)
     else: min_pix_vals = None
     if params['subtract_crosstalk']:
         if params['override_crosstalk'] is not None:
