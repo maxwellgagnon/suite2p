@@ -641,7 +641,7 @@ class Job:
             fused_files = n.concatenate(fused_files, axis=1)
         return fused_files
 
-    def svd_decompose_movie(self, svd_dir_tag, run_svd=True):
+    def svd_decompose_movie(self, svd_dir_tag, run_svd=True, end_batch=None):
         svd_dir = self.dirs[svd_dir_tag]
         self.save_params(copy_dir=svd_dir_tag)
         mov = self.get_registered_movie('registered_fused_data','fused')
@@ -674,7 +674,7 @@ class Job:
                                t_save_chunk = self.params['svd_save_time_chunk'],
                                comp_chunk = self.params['svd_save_comp_chunk'],
                                n_svd_blocks_per_batch = self.params['n_svd_blocks_per_batch'],
-                               log_cb = self.log,
+                               log_cb = self.log, end_batch=end_batch,
                                svd_dir = svd_dir, run_svd=run_svd)
         return svd_info
 
