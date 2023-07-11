@@ -2,7 +2,6 @@ import setuptools
 
 install_deps = ['importlib-metadata',
         'natsort',
-        'rastermap>0.1.0',
         'tifffile',
         'scanimage-tiff-reader>=1.4.1',
         'torch>=1.7.1',
@@ -11,7 +10,6 @@ install_deps = ['importlib-metadata',
         'numba>=0.43.1',
         'matplotlib',
         'scipy>=1.4.0',
-        'h5py',
         'sbxreader',
         'scikit-learn',]
 
@@ -34,7 +32,9 @@ test_deps = [
       'pytest-qt==3.3.0',
     ]
 
-all_deps = gui_deps + data_deps + nwb_deps
+# all_deps = gui_deps + data_deps + nwb_deps
+all_deps = data_deps # changed for s2p-lbm installation since we don't need the ui stuff
+
 
 try:
     import torch
