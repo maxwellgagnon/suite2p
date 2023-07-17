@@ -11,7 +11,7 @@ from torch import from_numpy
 from torch.fft import fft2 as torch_fft2
 from torch.fft import ifft2 as torch_ifft2
 
-from mkl_fft import fft2, ifft2
+# from mkl_fft import fft2, ifft2
 
 
 #try:
