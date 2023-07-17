@@ -155,8 +155,8 @@ def compute_reference(ops, frames):
         # shift reference image to position of mean shifts
         refImg = rigid.shift_frame(
             frame=refImg,
-            dy=int(np.round(-ymax[isort].mean())),
-            dx=int(np.round(-xmax[isort].mean()))
+            dy=int(np.round(-ymax[isort].nanmean())),
+            dx=int(np.round(-xmax[isort].nanmean()))
         )
 
     return refImg
