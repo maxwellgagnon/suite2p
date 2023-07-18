@@ -43,7 +43,8 @@ def prep_registration(full_mov, reg_ops, log_callback=default_log, filter_pcorr=
     ref_img_3d = []
     log_callback("Computing reference images")
     for i in range(nz):
-        ref_img = register.compute_reference(reg_ops, full_mov[i])
+        # ref_img = register.compute_reference(reg_ops, full_mov[i])
+        ref_img = compute_reference_dev(reg_ops, full_mov[i])
         ref_img_3d.append(ref_img)
         log_callback("  Computed reference for plane %d" % i,2)
     ref_img_3d = n.array(ref_img_3d)
