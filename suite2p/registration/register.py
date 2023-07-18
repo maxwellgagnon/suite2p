@@ -151,10 +151,7 @@ def compute_reference(ops, frames):
         nmax = int(frames.shape[0] * (1. + iter) / (2 * niter))
         isort = np.argsort(-cmax)[1:nmax]
         # reset reference image
-        refImg = frames[isort].mean(axis=0).astype(np.int16)
-        print(f'ymax: {ymax} | {type(ymax}')
-        print(f'xmax: {xmax} | {type(xmax}')
-        
+        refImg = frames[isort].mean(axis=0).astype(np.int16)       
         # shift reference image to position of mean shifts
         refImg = rigid.shift_frame(
             frame=refImg,
